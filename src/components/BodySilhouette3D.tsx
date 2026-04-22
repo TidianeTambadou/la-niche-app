@@ -95,6 +95,9 @@ type Props = {
   highlightedZone?: BodyZone | null;
   /** Called when user clicks a point on the body mesh. */
   onBodyClick?: (zone: BodyZone, position: [number, number, number]) => void;
+  /** When true, taps draw a preview marker (placement in progress).
+   *  When false, taps only zoom the camera. Defaults to false. */
+  placementMode?: boolean;
   readOnly?: boolean;
   className?: string;
 };
@@ -195,42 +198,31 @@ function Marker({
   const haloRef = useRef<THREE.Mesh>(null);
   const spotRef = useRef<THREE.Mesh>(null);
 
-  // Only run useFrame when this marker is highlighted — saves CPU on every
-  // other frame for non-pulsing markers (the heatmap can have many of them).
   useFrame((state) => {
     if (!highlighted || !haloRef.current || !spotRef.current) return;
     const t = state.clock.elapsedTime;
     const wave = (Math.sin(t * 1.6) + 1) / 2;
     haloRef.current.scale.setScalar(1 + wave * 0.55);
     (haloRef.current.material as THREE.MeshBasicMaterial).opacity =
-      0.32 - wave * 0.22;
+      0.45 - wave * 0.32;
     spotRef.current.scale.setScalar(1 + Math.sin(t * 1.6) * 0.08);
   });
 
   return (
     <group position={position}>
       <mesh ref={haloRef} renderOrder={2}>
-        {/* Lower segment count: from 24×24 to 12×12 — visually identical at
-            this size, 4× fewer triangles. */}
         <sphereGeometry args={[0.05, 12, 12]} />
         <meshBasicMaterial
           color="#000"
           transparent
-          opacity={0.18}
+          opacity={0.22}
           depthTest={false}
         />
       </mesh>
       <mesh ref={spotRef} renderOrder={3}>
         <sphereGeometry args={[0.025, 12, 12]} />
-        {/* Use MeshBasicMaterial: cheaper than MeshStandard (no lighting
-            calculations, depth, etc.) and the dot is so small lighting
-            wouldn't be visible anyway. */}
         <meshBasicMaterial color="#000" depthTest={false} />
       </mesh>
-      {/* Label rendered via DOM (Html) only on the highlighted marker —
-          drei's <Html> projects the position every frame, which adds up with
-          many markers. The Poses list below the silhouette already shows the
-          full mapping. */}
       {label && highlighted && (
         <Html
           position={[0.05, 0.04, 0]}
@@ -239,7 +231,7 @@ function Marker({
           zIndexRange={[50, 0]}
           style={{ pointerEvents: "none" }}
         >
-          <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-on-background bg-background/90 px-1.5 py-0.5 border border-outline-variant whitespace-nowrap">
+          <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-on-background bg-background/95 px-2 py-0.5 border border-outline-variant whitespace-nowrap">
             {label}
           </span>
         </Html>
@@ -254,6 +246,7 @@ function PreviewMarker({
 }: {
   position: [number, number, number];
 }) {
+  const color = "#000";
   const haloRef = useRef<THREE.Mesh>(null);
   const ring1Ref = useRef<THREE.Mesh>(null);
   const ring2Ref = useRef<THREE.Mesh>(null);
@@ -290,7 +283,7 @@ function PreviewMarker({
       <mesh ref={haloRef} renderOrder={2}>
         <sphereGeometry args={[0.05, 12, 12]} />
         <meshBasicMaterial
-          color="#000"
+          color={color}
           transparent
           opacity={0.4}
           depthTest={false}
@@ -298,12 +291,12 @@ function PreviewMarker({
       </mesh>
       <mesh renderOrder={3}>
         <sphereGeometry args={[0.022, 12, 12]} />
-        <meshBasicMaterial color="#000" depthTest={false} />
+        <meshBasicMaterial color={color} depthTest={false} />
       </mesh>
       <mesh ref={ring1Ref} rotation={[Math.PI / 2, 0, 0]} renderOrder={3}>
         <torusGeometry args={[0.03, 0.002, 4, 16]} />
         <meshBasicMaterial
-          color="#000"
+          color={color}
           transparent
           opacity={0.6}
           depthTest={false}
@@ -312,7 +305,7 @@ function PreviewMarker({
       <mesh ref={ring2Ref} rotation={[Math.PI / 2, 0, 0]} renderOrder={3}>
         <torusGeometry args={[0.03, 0.0015, 4, 16]} />
         <meshBasicMaterial
-          color="#000"
+          color={color}
           transparent
           opacity={0.5}
           depthTest={false}
@@ -327,7 +320,7 @@ function PreviewMarker({
  * --------------------------------------------------------------------- */
 
 const OVERVIEW = {
-  pos: [0, 1.05, 2.6] as const,
+  pos: [0, 1.05, 3.4] as const,
   look: [0, 1.05, 0] as const,
 };
 
@@ -438,6 +431,7 @@ export function BodySilhouette3D({
   filledMarkers = [],
   highlightedZone,
   onBodyClick,
+  placementMode = false,
   readOnly = false,
   className,
 }: Props) {
@@ -470,8 +464,15 @@ export function BodySilhouette3D({
     position: [number, number, number],
   ) {
     if (readOnly) return;
-    setPreviewPoint(position);
+    // Camera zoom always — useful even when just inspecting.
     setFocusPoint(position);
+    // Preview marker only when the parent says we're placing. Otherwise the
+    // user is just looking around and shouldn't see a stray dot appear.
+    if (placementMode) {
+      setPreviewPoint(position);
+    } else {
+      setPreviewPoint(null);
+    }
     onBodyClick?.(zone, position);
   }
 
@@ -543,7 +544,7 @@ export function BodySilhouette3D({
           );
         })}
 
-        {/* Preview marker (the "drawn" marker while picker opens) */}
+        {/* Preview marker (drawn while user picks a spot, before commit). */}
         {previewPoint && <PreviewMarker position={previewPoint} />}
 
         {/* ContactShadows removed — adds a per-frame FBO render pass.

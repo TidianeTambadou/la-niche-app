@@ -31,6 +31,16 @@ export type BodyPlacement = {
   /** Exact world-space point on the body where the perfume was placed. When
    *  absent, the marker falls back to the predefined anchor for `zone`. */
   position?: [number, number, number];
+  /** Snapshot of the fragrance metadata captured AT placement time. Used for
+   *  display when the fragrance isn't in the local catalog (e.g. picked from
+   *  the agent's Fragrantica search → not in `shop_stock`). */
+  fragranceMeta?: {
+    name: string;
+    brand: string;
+    imageUrl?: string | null;
+    notesBrief?: string;
+    sourceUrl?: string;
+  };
 };
 
 export type TestedFragrance = {
@@ -84,20 +94,19 @@ type StoreActions = {
   cancelBalade: () => void;
 
   // Balade interactions
-  /** Replace any existing placement at this zone with the new fragrance.
-   *  Same fragrance is allowed at multiple zones. Optional `position` stores
-   *  the exact 3D hit point on the body (for drawing a precise marker). */
+  /** Replace any existing placement at this zone with the new fragrance. */
   placeOnBody: (
     zone: BodyZone,
     fragranceId: string,
     position?: [number, number, number],
+    fragranceMeta?: BodyPlacement["fragranceMeta"],
   ) => void;
-  /** Add a fragrance on top of existing placements at the same zone (layering).
-   *  No-op if the same (zone, fragranceId) tuple already exists. */
+  /** Add a fragrance on top of existing placements at the same zone (layering). */
   layerOnBody: (
     zone: BodyZone,
     fragranceId: string,
     position?: [number, number, number],
+    fragranceMeta?: BodyPlacement["fragranceMeta"],
   ) => void;
   /** Move the FIRST placement of `fragranceId` to a new zone. */
   movePlacement: (
@@ -243,7 +252,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const placeOnBody = useCallback<StoreActions["placeOnBody"]>(
-    (zone, fragranceId, position) => {
+    (zone, fragranceId, position, fragranceMeta) => {
       setState((s) => {
         if (!s.activeBalade) return s;
         const keep = s.activeBalade.placements.filter((p) => p.zone !== zone);
@@ -251,7 +260,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           ...s,
           activeBalade: {
             ...s.activeBalade,
-            placements: [...keep, { zone, fragranceId, position }],
+            placements: [
+              ...keep,
+              { zone, fragranceId, position, fragranceMeta },
+            ],
           },
         };
       });
@@ -260,7 +272,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const layerOnBody = useCallback<StoreActions["layerOnBody"]>(
-    (zone, fragranceId, position) => {
+    (zone, fragranceId, position, fragranceMeta) => {
       setState((s) => {
         if (!s.activeBalade) return s;
         const exists = s.activeBalade.placements.some(
@@ -273,7 +285,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             ...s.activeBalade,
             placements: [
               ...s.activeBalade.placements,
-              { zone, fragranceId, position },
+              { zone, fragranceId, position, fragranceMeta },
             ],
           },
         };

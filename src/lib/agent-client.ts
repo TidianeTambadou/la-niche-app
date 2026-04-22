@@ -1,0 +1,112 @@
+/**
+ * Frontend wrapper around POST /api/agent.
+ * Safe to import from any Client Component — never touches the API key.
+ */
+
+import type {
+  AgentResponse,
+  IdentifyResult,
+  SearchCandidate,
+} from "@/lib/agent";
+
+async function call(body: unknown, signal?: AbortSignal): Promise<AgentResponse> {
+  const res = await fetch("/api/agent", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  return (await res.json()) as AgentResponse;
+}
+
+/* -------------------------------------------------------------------------
+ * LRU cache for search results.
+ *
+ * The default Anthropic Tier 1 plan is 10K input tokens / minute. Each web-
+ * search call burns 3-8K tokens (system + prompt + scraped page content).
+ * Without a cache, 2-3 quick searches blow the rate limit. Same query within
+ * 5 minutes hits the cache instead.
+ * --------------------------------------------------------------------- */
+
+const SEARCH_CACHE = new Map<string, { ts: number; value: SearchCandidate[] }>();
+const SEARCH_CACHE_MAX = 40;
+const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function cachedSearchResults(key: string): SearchCandidate[] | null {
+  const hit = SEARCH_CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > SEARCH_CACHE_TTL_MS) {
+    SEARCH_CACHE.delete(key);
+    return null;
+  }
+  // Touch (re-insert) so this becomes the most-recent for LRU eviction.
+  SEARCH_CACHE.delete(key);
+  SEARCH_CACHE.set(key, hit);
+  return hit.value;
+}
+
+function rememberSearchResults(key: string, value: SearchCandidate[]): void {
+  SEARCH_CACHE.set(key, { ts: Date.now(), value });
+  while (SEARCH_CACHE.size > SEARCH_CACHE_MAX) {
+    // Map preserves insertion order — first key is the oldest.
+    const firstKey = SEARCH_CACHE.keys().next().value;
+    if (firstKey === undefined) break;
+    SEARCH_CACHE.delete(firstKey);
+  }
+}
+
+export async function agentSearch(
+  query: string,
+  signal?: AbortSignal,
+): Promise<SearchCandidate[]> {
+  const key = query.trim().toLowerCase();
+  if (key.length < 3) return [];
+
+  const cached = cachedSearchResults(key);
+  if (cached) return cached;
+
+  const res = await call(
+    { mode: "search", payload: { query: key } },
+    signal,
+  );
+  if (res.ok && res.mode === "search") {
+    rememberSearchResults(key, res.candidates);
+    return res.candidates;
+  }
+  if (!res.ok) {
+    const msg =
+      res.error === "agent_disabled"
+        ? "Agent IA désactivé (ANTHROPIC_API_KEY non configurée)"
+        : res.error === "upstream_error" && res.detail?.startsWith("429")
+          ? "Limite de débit Anthropic atteinte. Patiente une minute."
+          : res.error === "upstream_error"
+            ? `Erreur Anthropic : ${res.detail ?? "?"}`
+            : `${res.error}${res.detail ? ` — ${res.detail}` : ""}`;
+    throw new Error(msg);
+  }
+  return [];
+}
+
+export async function agentIdentify(
+  imageBase64: string,
+  imageMediaType: string,
+): Promise<IdentifyResult | null> {
+  const res = await call({
+    mode: "identify",
+    payload: { imageBase64, imageMediaType },
+  });
+  if (res.ok && res.mode === "identify") return res.result;
+  return null;
+}
+
+export async function agentAsk(question: string): Promise<string> {
+  const res = await call({ mode: "ask", payload: { question } });
+  if (res.ok && res.mode === "ask") return res.answer;
+  if (!res.ok) {
+    if (res.error === "agent_disabled") {
+      return "L'expert IA n'est pas configuré sur ce déploiement.";
+    }
+    throw new Error(res.error);
+  }
+  throw new Error("Réponse invalide");
+}

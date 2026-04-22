@@ -13,12 +13,10 @@ import {
   BODY_ZONE_LABELS,
   type BodyZone,
 } from "@/lib/fragrances";
-import { useFragrances, type Fragrance } from "@/lib/data";
-import { useStore } from "@/lib/store";
-
-/** Delay (ms) before the picker sheet opens after a zone tap. Lets the 3D
- *  camera zoom + pulse animation play first. */
-const PICKER_DELAY_MS = 450;
+import { fragranceKey, useFragrances, type Fragrance } from "@/lib/data";
+import { useStore, type BodyPlacement } from "@/lib/store";
+import { agentSearch } from "@/lib/agent-client";
+import type { SearchCandidate } from "@/lib/agent";
 
 export default function FreeBaladePage() {
   const router = useRouter();
@@ -32,30 +30,38 @@ export default function FreeBaladePage() {
   } = useStore();
 
   const [selectedZone, setSelectedZone] = useState<BodyZone | null>(null);
-  /** Exact world-space point on the body where the user just clicked. Stored
-   *  alongside selectedZone so the placement is "drawn" precisely there. */
+  /** Last clicked point on the body — kept for camera focus continuity after
+   *  a placement so the user keeps seeing the spot they just drew. */
   const [selectedPosition, setSelectedPosition] = useState<
     [number, number, number] | null
   >(null);
-  /** Picker state machine:
-   *  - "closed": nothing on screen
-   *  - "choose": tiny floating bar with [Rechercher | Scanner]
-   *  - "search": the search-the-catalog sheet
-   *  - "scan":   the camera-scan sheet
+  /**
+   * Free-balade flow state machine. Reflects the real perfumery sequence:
+   * smell first (search OR scan a perfume), THEN decide where on the body
+   * you want it.
+   *
+   *   idle       → user can drag/zoom the model. Body taps do not place.
+   *   searching  → SearchSheet open
+   *   scanning   → ScanSheet open
+   *   placing    → fragrance picked, body becomes interactive: next tap on
+   *                the mannequin draws the marker at the click point.
    */
-  const [pickerStep, setPickerStep] = useState<
-    "closed" | "choose" | "search" | "scan"
-  >("closed");
+  type Flow =
+    | { kind: "idle" }
+    | { kind: "scanning" }
+    | { kind: "placing"; fragrance: Fragrance }
+    /** User has tapped a body point but hasn't confirmed yet. The preview
+     *  marker is drawn at `position`. Re-tapping moves the preview; the
+     *  ConfirmBanner is the only way to commit. */
+    | {
+        kind: "confirming";
+        fragrance: Fragrance;
+        zone: BodyZone;
+        position: [number, number, number];
+      };
+  const [flow, setFlow] = useState<Flow>({ kind: "idle" });
   const [editingFragranceId, setEditingFragranceId] = useState<string | null>(
     null,
-  );
-  const pickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
-    },
-    [],
   );
 
   useEffect(() => {
@@ -85,28 +91,14 @@ export default function FreeBaladePage() {
     [placements, fragrances],
   );
 
-  function openChooserDelayed() {
-    if (pickerTimerRef.current) {
-      clearTimeout(pickerTimerRef.current);
-      pickerTimerRef.current = null;
-    }
-    pickerTimerRef.current = setTimeout(() => {
-      setPickerStep("choose");
-      pickerTimerRef.current = null;
-    }, PICKER_DELAY_MS);
-  }
-
   function handleBodyClick(
     zone: BodyZone,
     position: [number, number, number],
   ) {
-    if (pickerTimerRef.current) {
-      clearTimeout(pickerTimerRef.current);
-      pickerTimerRef.current = null;
-    }
-
+    // 1) MOVE flow takes priority (user clicked "déplacer" on an existing
+    //    placement and is now picking a new point). Move is INSTANT (the user
+    //    explicitly chose to relocate; no second confirmation).
     if (editingFragranceId) {
-      // Moving an existing placement to the new point.
       movePlacement(editingFragranceId, zone, position);
       setEditingFragranceId(null);
       setSelectedZone(zone);
@@ -114,30 +106,70 @@ export default function FreeBaladePage() {
       return;
     }
 
-    // Every click = new placement. To remove an existing one, use the delete
-    // button in the Poses list below.
-    setSelectedZone(zone);
-    setSelectedPosition(position);
-    openChooserDelayed();
+    // 2) PLACEMENT flow: tap = preview only. Move into "confirming" state,
+    //    keep the same fragrance, store the candidate zone/position. The
+    //    ConfirmBanner button is the only way to actually commit.
+    if (flow.kind === "placing" || flow.kind === "confirming") {
+      const fragrance =
+        flow.kind === "placing" ? flow.fragrance : flow.fragrance;
+      setFlow({ kind: "confirming", fragrance, zone, position });
+      setSelectedZone(zone);
+      setSelectedPosition(position);
+      return;
+    }
+
+    // 3) IDLE: tap only zooms (handled internally by BodySilhouette3D).
   }
 
-  function assign(fragrance: Fragrance) {
-    if (!selectedZone) return;
-    layerOnBody(selectedZone, fragrance.key, selectedPosition ?? undefined);
-    setPickerStep("closed");
-    // Keep selectedZone / selectedPosition so the marker stays highlighted +
-    // camera stays focused on the just-placed point.
+  function confirmPlacement() {
+    if (flow.kind !== "confirming") return;
+    // Snapshot the fragrance meta (incl. image URL) so the marker/list/banner
+    // keep rendering proper data even for external Fragrantica candidates
+    // that aren't in the local shop_stock catalog.
+    const meta: BodyPlacement["fragranceMeta"] = {
+      name: flow.fragrance.name,
+      brand: flow.fragrance.brand,
+      imageUrl: flow.fragrance.imageUrl,
+    };
+    layerOnBody(flow.zone, flow.fragrance.key, flow.position, meta);
+    setFlow({ kind: "idle" });
   }
 
-  function closePicker() {
-    setPickerStep("closed");
+  /** Called by SearchSheet / ScanSheet when the user picks a fragrance from
+   *  the local catalog. */
+  function onFragranceChosen(fragrance: Fragrance) {
+    setFlow({ kind: "placing", fragrance });
+  }
+
+  /** Called when the user picks a Fragrantica candidate from the inline
+   *  autocomplete. We synthesize a Fragrance object so the rest of the flow
+   *  (placing → confirming → marker) is unchanged. */
+  function onCandidatePicked(c: SearchCandidate) {
+    const synthetic: Fragrance = {
+      key: fragranceKey(c.brand, c.name),
+      id: fragranceKey(c.brand, c.name),
+      name: c.name,
+      brand: c.brand,
+      imageUrl: c.image_url ?? null,
+      reference: `FR-${fragranceKey(c.brand, c.name).slice(0, 6).toUpperCase()}`,
+      availability: [],
+      bestPrice: null,
+      tags: c.notes_brief ? [c.notes_brief] : [],
+      family: c.family,
+    };
+    setFlow({ kind: "placing", fragrance: synthetic });
+  }
+
+  function cancelFlow() {
+    setFlow({ kind: "idle" });
+    setEditingFragranceId(null);
     setSelectedZone(null);
     setSelectedPosition(null);
   }
 
   function startMove(fragranceId: string) {
     setEditingFragranceId(fragranceId);
-    setPickerStep("closed");
+    setFlow({ kind: "idle" });
     setSelectedZone(null);
   }
 
@@ -160,19 +192,37 @@ export default function FreeBaladePage() {
         </Link>
       </header>
 
-      <p className="text-xs text-on-surface-variant mb-4">
-        {editingFragranceId
-          ? "Touche un nouveau point sur le corps pour déplacer la pose."
-          : "Touche n'importe où sur le corps pour assigner un parfum."}
-      </p>
-
-      <section className="bg-surface-container-low border border-outline-variant py-6 mb-8">
-        <BodySilhouette
-          filledMarkers={filledMarkers}
-          highlightedZone={selectedZone}
-          onBodyClick={handleBodyClick}
+      {/* Conditional view: question screen by default, mannequin only when
+          something is in progress (placing/confirming/editing). */}
+      {flow.kind === "placing" ||
+      flow.kind === "confirming" ||
+      editingFragranceId ? (
+        <>
+          <p className="text-xs text-on-surface-variant mb-4">
+            {editingFragranceId
+              ? "Touche un nouveau point sur le corps pour déplacer la pose."
+              : flow.kind === "placing"
+                ? `Où as-tu mis ${flow.fragrance.name} ? Touche le corps pour positionner.`
+                : flow.kind === "confirming"
+                  ? `Re-touche pour ajuster, ou confirme la pose en bas.`
+                  : null}
+          </p>
+          <section className="bg-surface-container-low border border-primary py-6 mb-8 transition-colors">
+            <BodySilhouette
+              filledMarkers={filledMarkers}
+              highlightedZone={selectedZone}
+              onBodyClick={handleBodyClick}
+              placementMode
+            />
+          </section>
+        </>
+      ) : (
+        <QuestionScreen
+          step={placements.length + 1}
+          onScan={() => setFlow({ kind: "scanning" })}
+          onCandidatePicked={onCandidatePicked}
         />
-      </section>
+      )}
 
       <section className="mb-8">
         <h2 className="text-[10px] uppercase tracking-[0.2em] font-bold mb-3">
@@ -185,9 +235,30 @@ export default function FreeBaladePage() {
         ) : (
           <ul className="border-t border-outline-variant/40">
             {placements.map((p) => {
-              const f = fragrances.find((x) => x.key === p.fragranceId);
-              if (!f) return null;
-              const isEditing = editingFragranceId === f.key;
+              // Try local catalog first; fall back to placement.fragranceMeta
+              // for external Fragrantica picks not in the shop_stock catalog.
+              const catalogFrag = fragrances.find(
+                (x) => x.key === p.fragranceId,
+              );
+              const display = catalogFrag
+                ? {
+                    key: catalogFrag.key,
+                    name: catalogFrag.name,
+                    brand: catalogFrag.brand,
+                    imageUrl: catalogFrag.imageUrl,
+                    isExternal: false,
+                  }
+                : p.fragranceMeta
+                  ? {
+                      key: p.fragranceId,
+                      name: p.fragranceMeta.name,
+                      brand: p.fragranceMeta.brand,
+                      imageUrl: p.fragranceMeta.imageUrl ?? null,
+                      isExternal: true,
+                    }
+                  : null;
+              if (!display) return null;
+              const isEditing = editingFragranceId === display.key;
               const layerCount = placements.filter(
                 (q) => q.zone === p.zone,
               ).length;
@@ -201,15 +272,16 @@ export default function FreeBaladePage() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <span className="w-9 h-9 bg-primary text-on-primary flex items-center justify-center text-[10px] font-bold font-mono">
-                        {fragranceInitials(f.name)}
-                      </span>
+                      <PlacementThumbnail
+                        imageUrl={display.imageUrl}
+                        name={display.name}
+                      />
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate">
-                          {f.name}
+                          {display.name}
                         </p>
                         <p className="text-[10px] uppercase tracking-widest text-outline">
-                          {BODY_ZONE_LABELS[p.zone]}
+                          {display.brand} · {BODY_ZONE_LABELS[p.zone]}
                           {layerCount > 1 && (
                             <span className="ml-2 text-primary">
                               · LAYER {layerCount}
@@ -221,7 +293,7 @@ export default function FreeBaladePage() {
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        onClick={() => startMove(f.key)}
+                        onClick={() => startMove(display.key)}
                         className={clsx(
                           "p-2 hover:text-primary transition-colors",
                           isEditing && "text-primary",
@@ -247,72 +319,281 @@ export default function FreeBaladePage() {
         )}
       </section>
 
-      <section className="flex flex-col gap-2">
-        <Link
-          href="/search"
-          className="w-full py-3 border border-outline-variant rounded-full text-[10px] uppercase tracking-widest font-bold hover:border-primary text-center transition-all flex items-center justify-center gap-2"
-        >
-          <Icon name="search" size={14} />
-          Trouver via Search
-        </Link>
-        <Link
-          href="/scan"
-          className="w-full py-3 border border-outline-variant rounded-full text-[10px] uppercase tracking-widest font-bold hover:border-primary text-center transition-all flex items-center justify-center gap-2"
-        >
-          <Icon name="qr_code_scanner" size={14} />
-          Identifier via Scan
-        </Link>
-      </section>
+      {/* Floating banner — three variants depending on flow. The thumbnail
+          image identifies the fragrance at a glance instead of an abstract
+          color tag. */}
+      {flow.kind === "placing" && (
+        <ActionBanner
+          label="Touche le corps pour positionner"
+          fragranceName={flow.fragrance.name}
+          fragranceImage={flow.fragrance.imageUrl}
+          onCancel={cancelFlow}
+        />
+      )}
+      {flow.kind === "confirming" && (
+        <ActionBanner
+          label="Confirmer la pose ici ?"
+          fragranceName={flow.fragrance.name}
+          fragranceImage={flow.fragrance.imageUrl}
+          onCancel={cancelFlow}
+          confirmLabel="Confirmer"
+          onConfirm={confirmPlacement}
+        />
+      )}
+      {editingFragranceId && flow.kind === "idle" && (() => {
+        const f = fragrances.find((f) => f.key === editingFragranceId);
+        const meta = placements.find(
+          (p) => p.fragranceId === editingFragranceId,
+        )?.fragranceMeta;
+        return (
+          <ActionBanner
+            label="Déplace vers un nouveau point"
+            fragranceName={f?.name ?? meta?.name ?? ""}
+            fragranceImage={f?.imageUrl ?? meta?.imageUrl ?? null}
+            onCancel={cancelFlow}
+          />
+        );
+      })()}
 
-      {pickerStep === "choose" && selectedZone && (
-        <ZoneActionChooser
-          zoneLabel={BODY_ZONE_LABELS[selectedZone]}
-          onSearch={() => setPickerStep("search")}
-          onScan={() => setPickerStep("scan")}
-          onClose={closePicker}
-        />
-      )}
-      {pickerStep === "search" && selectedZone && (
-        <SearchSheet
-          zoneLabel={BODY_ZONE_LABELS[selectedZone]}
-          fragrances={fragrances}
-          onPick={assign}
-          onBack={() => setPickerStep("choose")}
-          onClose={closePicker}
-        />
-      )}
-      {pickerStep === "scan" && selectedZone && (
+      {/* SearchSheet removed — search is now an inline autocomplete in
+          QuestionScreen, hitting the AI agent (Fragrantica web_search).
+          Only Scan still needs a fullscreen sheet (camera). */}
+      {flow.kind === "scanning" && (
         <ScanSheet
-          zoneLabel={BODY_ZONE_LABELS[selectedZone]}
           fragrances={fragrances}
-          onPick={assign}
-          onBack={() => setPickerStep("choose")}
-          onClose={closePicker}
+          onPick={onFragranceChosen}
+          onClose={cancelFlow}
         />
       )}
     </div>
   );
 }
 
-
 /* -------------------------------------------------------------------------
- * ZoneActionChooser — tiny floating bar shown right after a body click.
- *
- * Just two actions (Rechercher / Scanner) + the zone label + a close button.
- * Sits at the bottom of the viewport, ~60px tall, doesn't cover the
- * mannequin. Once the user picks one, the corresponding sheet opens.
+ * PlacementThumbnail — square image with initials fallback when load fails.
  * --------------------------------------------------------------------- */
 
-function ZoneActionChooser({
-  zoneLabel,
-  onSearch,
-  onScan,
-  onClose,
+function PlacementThumbnail({
+  imageUrl,
+  name,
+  size = "md",
 }: {
-  zoneLabel: string;
-  onSearch: () => void;
+  imageUrl: string | null | undefined;
+  name: string;
+  size?: "sm" | "md";
+}) {
+  const [failed, setFailed] = useState(false);
+  const dim = size === "sm" ? "w-7 h-7 text-[9px]" : "w-10 h-10 text-[10px]";
+
+  if (!imageUrl || failed) {
+    return (
+      <span
+        className={clsx(
+          "flex items-center justify-center font-bold font-mono bg-surface-container-high text-on-surface-variant border border-outline-variant flex-shrink-0",
+          dim,
+        )}
+        aria-hidden
+      >
+        {fragranceInitials(name)}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={clsx(
+        "block bg-surface-container-low overflow-hidden flex-shrink-0",
+        dim,
+      )}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={imageUrl}
+        alt={name}
+        className="w-full h-full object-cover"
+        onError={() => setFailed(true)}
+      />
+    </span>
+  );
+}
+
+/* -------------------------------------------------------------------------
+ * QuestionScreen — the default view between placements.
+ *
+ * Asks "Qu'est-ce que tu as senti ?" with two big CTAs (Scanner / Rechercher).
+ * Replaces the mannequin while idle: once the user has identified a perfume,
+ * the page swaps to the mannequin view so they can pick the body zone.
+ * After commit, we come back here for the next perfume.
+ * --------------------------------------------------------------------- */
+
+function QuestionScreen({
+  step,
+  onScan,
+  onCandidatePicked,
+}: {
+  step: number;
   onScan: () => void;
-  onClose: () => void;
+  /** Called when the user picks a fragrance from the autocomplete dropdown. */
+  onCandidatePicked: (candidate: SearchCandidate) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [candidates, setCandidates] = useState<SearchCandidate[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Debounced search: 800ms after the last keystroke, hit /api/agent.
+  // Minimum 3 chars before firing — keeps the rate-limit-tight Anthropic
+  // budget healthy. Same query within 5 min comes from the client cache.
+  useEffect(() => {
+    const q = query.trim();
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (abortRef.current) abortRef.current.abort();
+    if (q.length < 3) {
+      setCandidates([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    debounceRef.current = setTimeout(async () => {
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      try {
+        const results = await agentSearch(q, ctrl.signal);
+        if (!ctrl.signal.aborted) {
+          setCandidates(results);
+          setLoading(false);
+        }
+      } catch (e: unknown) {
+        if (!ctrl.signal.aborted) {
+          setError(e instanceof Error ? e.message : "Erreur inconnue");
+          setLoading(false);
+        }
+      }
+    }, 800);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query]);
+
+  return (
+    <section className="bg-surface-container-low border border-outline-variant px-5 py-8 mb-8">
+      <p className="text-[10px] uppercase tracking-[0.3em] text-outline mb-3 text-center">
+        Étape {String(step).padStart(2, "0")} · Identification
+      </p>
+      <h2 className="text-2xl md:text-3xl font-bold tracking-tighter leading-[1.05] mb-5 text-center">
+        Qu&apos;est-ce que
+        <br />
+        <span className="italic font-serif font-light">tu as senti ?</span>
+      </h2>
+
+      {/* Inline autocomplete — no modal. Hits the AI agent (Fragrantica
+          web_search) with 600ms debounce. */}
+      <div className="relative mb-3">
+        <div className="flex items-center gap-2 border-b-2 border-primary pb-2">
+          <Icon name="search" size={16} className="text-outline" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Tape un nom (ex: Aventus, Vetiver)…"
+            className="flex-1 bg-transparent text-sm focus:outline-none placeholder:text-outline/60"
+            autoComplete="off"
+          />
+          {loading && (
+            <Icon name="progress_activity" size={14} className="text-outline animate-spin" />
+          )}
+        </div>
+
+        {/* Dropdown */}
+        {(candidates.length > 0 || error || (query.length >= 3 && !loading)) && (
+          <div className="absolute left-0 right-0 top-full mt-1 bg-background border border-outline-variant shadow-2xl z-20 max-h-64 overflow-y-auto">
+            {error && (
+              <p className="px-4 py-3 text-xs text-error">{error}</p>
+            )}
+            {!error && candidates.length === 0 && !loading && (
+              <p className="px-4 py-3 text-xs text-outline italic">
+                Aucun résultat sur Fragrantica pour « {query} ».
+              </p>
+            )}
+            {candidates.map((c, i) => (
+              <button
+                key={`${c.brand}-${c.name}-${i}`}
+                type="button"
+                onClick={() => {
+                  setQuery("");
+                  setCandidates([]);
+                  onCandidatePicked(c);
+                }}
+                className="w-full text-left px-3 py-2 hover:bg-surface-container-low border-b border-outline-variant/30 last:border-0 flex items-center gap-3"
+              >
+                <PlacementThumbnail
+                  imageUrl={c.image_url}
+                  name={c.name}
+                  size="md"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-outline">
+                    {c.brand}
+                  </p>
+                  <p className="text-sm font-medium truncate">{c.name}</p>
+                  {c.notes_brief && (
+                    <p className="text-[10px] text-on-surface-variant truncate mt-0.5">
+                      {c.notes_brief}
+                    </p>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3 my-4">
+        <div className="flex-1 h-px bg-outline-variant/40" />
+        <span className="text-[9px] uppercase tracking-widest text-outline">
+          ou
+        </span>
+        <div className="flex-1 h-px bg-outline-variant/40" />
+      </div>
+
+      <button
+        type="button"
+        onClick={onScan}
+        className="w-full py-3 bg-primary text-on-primary rounded-full text-xs uppercase tracking-[0.2em] font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform"
+      >
+        <Icon name="qr_code_scanner" size={16} />
+        Scanner un flacon
+      </button>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------------------
+ * ActionBanner — pinned at the bottom while the user has a pending action
+ * (place a new perfume OR move an existing one). Tells them what to do +
+ * cancel.
+ * --------------------------------------------------------------------- */
+
+function ActionBanner({
+  label,
+  fragranceName,
+  fragranceImage,
+  onCancel,
+  confirmLabel,
+  onConfirm,
+}: {
+  label: string;
+  fragranceName: string;
+  /** Bottle image — shown as a 12×12 thumbnail at the left of the banner. */
+  fragranceImage?: string | null;
+  onCancel: () => void;
+  /** When provided, render a primary confirm button on the right. */
+  confirmLabel?: string;
+  onConfirm?: () => void;
 }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
@@ -320,80 +601,80 @@ function ZoneActionChooser({
     return () => cancelAnimationFrame(id);
   }, []);
 
+  const hasConfirm = Boolean(confirmLabel && onConfirm);
+
   return (
     <div
-      className="fixed inset-x-0 bottom-0 z-50 flex justify-center pointer-events-none"
-      aria-modal
-      role="dialog"
+      className="fixed inset-x-0 bottom-0 z-50 flex justify-center px-4 pb-24 pointer-events-none"
+      role="status"
+      aria-live="polite"
     >
       <div
         className={clsx(
-          "pointer-events-auto bg-background border border-outline-variant shadow-2xl flex items-stretch m-4 mb-6 safe-bottom transition-all duration-300",
-          mounted
-            ? "opacity-100 translate-y-0"
-            : "opacity-0 translate-y-4",
+          "pointer-events-auto bg-primary text-on-primary shadow-2xl flex items-stretch max-w-md w-full transition-all duration-300",
+          mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4",
         )}
       >
-        <div className="px-4 py-2 flex flex-col justify-center min-w-0 max-w-[40vw]">
-          <p className="text-[9px] uppercase tracking-[0.2em] text-outline">
-            Assigner à
-          </p>
-          <p className="text-xs font-semibold tracking-tight truncate">
-            {zoneLabel}
-          </p>
+        {fragranceImage && (
+          <div className="w-12 h-auto flex-shrink-0 bg-on-primary/10 overflow-hidden">
+            <img
+              src={fragranceImage}
+              alt=""
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = "none";
+              }}
+            />
+          </div>
+        )}
+        <div className="flex items-center gap-3 px-4 py-3 flex-1 min-w-0">
+          <div className="flex-1 min-w-0">
+            <p className="text-[9px] uppercase tracking-[0.2em] opacity-70">
+              {label}
+            </p>
+            <p className="text-sm font-semibold tracking-tight truncate">
+              {fragranceName}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Annuler"
+            className="opacity-70 hover:opacity-100 active:scale-95 transition-all flex-shrink-0"
+          >
+            <Icon name="close" size={16} />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onSearch}
-          className="flex items-center gap-1.5 px-4 border-l border-outline-variant/40 hover:bg-surface-container-low active:bg-surface-container transition-colors"
-        >
-          <Icon name="search" size={14} />
-          <span className="text-[10px] uppercase tracking-widest font-bold">
-            Rechercher
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={onScan}
-          className="flex items-center gap-1.5 px-4 border-l border-outline-variant/40 hover:bg-surface-container-low active:bg-surface-container transition-colors"
-        >
-          <Icon name="qr_code_scanner" size={14} />
-          <span className="text-[10px] uppercase tracking-widest font-bold">
-            Scanner
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Annuler"
-          className="px-3 border-l border-outline-variant/40 hover:bg-surface-container-low active:bg-surface-container transition-colors text-outline hover:text-on-background"
-        >
-          <Icon name="close" size={14} />
-        </button>
+        {hasConfirm && (
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="bg-on-primary text-primary px-5 py-3 text-[10px] uppercase tracking-[0.2em] font-bold active:scale-95 transition-transform flex items-center gap-1.5 flex-shrink-0"
+          >
+            <Icon name="check" size={14} />
+            {confirmLabel}
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
+
 /* -------------------------------------------------------------------------
- * SearchSheet + ScanSheet — full-purpose sheets opened from the chooser.
- *
- * Each wraps the existing inner panel (SearchPanel / ScanPanel) with a slide
- * animation, header (zone label + back button + close), and ~50vh max-height.
+ * SearchSheet + ScanSheet — bottom sheets for the perfume identification
+ * step. Header just shows the action title (no zone yet — placement comes
+ * AFTER picking the fragrance).
  * --------------------------------------------------------------------- */
 
 function PickerSheet({
-  zoneLabel,
   title,
   icon,
-  onBack,
   onClose,
   children,
 }: {
-  zoneLabel: string;
   title: string;
   icon: string;
-  onBack: () => void;
   onClose: () => void;
   children: React.ReactNode;
 }) {
@@ -417,39 +698,26 @@ function PickerSheet({
       />
       <div
         className={clsx(
-          "relative w-full max-w-screen-md bg-background border-t border-outline-variant max-h-[50vh] flex flex-col safe-bottom shadow-2xl transition-transform duration-300 ease-out",
+          "relative w-full max-w-screen-md bg-background border-t border-outline-variant max-h-[38vh] flex flex-col safe-bottom shadow-2xl transition-transform duration-300 ease-out",
           mounted ? "translate-y-0" : "translate-y-full",
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="pt-2 pb-1 flex justify-center">
+        <div className="pt-1.5 pb-1 flex justify-center">
           <div className="w-10 h-1 bg-outline-variant rounded-full" />
         </div>
-        <div className="px-6 pt-2 pb-3 flex items-center justify-between gap-3 border-b border-outline-variant/40">
-          <button
-            type="button"
-            onClick={onBack}
-            aria-label="Retour"
-            className="text-outline hover:text-on-background flex-shrink-0"
-          >
-            <Icon name="arrow_back" size={18} />
-          </button>
-          <div className="min-w-0 flex-1 text-center">
-            <p className="text-[9px] uppercase tracking-[0.2em] text-outline flex items-center justify-center gap-1.5">
-              <Icon name={icon} size={11} />
-              {title}
-            </p>
-            <p className="text-sm font-semibold tracking-tight truncate">
-              {zoneLabel}
-            </p>
-          </div>
+        <div className="px-5 pb-2 flex items-center justify-between gap-3 border-b border-outline-variant/40">
+          <p className="text-[10px] uppercase tracking-[0.2em] font-bold flex items-center gap-2">
+            <Icon name={icon} size={12} />
+            {title}
+          </p>
           <button
             type="button"
             onClick={onClose}
             aria-label="Fermer"
             className="text-outline hover:text-on-background flex-shrink-0"
           >
-            <Icon name="close" size={18} />
+            <Icon name="close" size={16} />
           </button>
         </div>
         <div className="flex-1 min-h-0 flex flex-col">{children}</div>
@@ -458,123 +726,23 @@ function PickerSheet({
   );
 }
 
-function SearchSheet({
-  zoneLabel,
-  fragrances,
-  onPick,
-  onBack,
-  onClose,
-}: {
-  zoneLabel: string;
-  fragrances: Fragrance[];
-  onPick: (f: Fragrance) => void;
-  onBack: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <PickerSheet
-      zoneLabel={zoneLabel}
-      title="Rechercher"
-      icon="search"
-      onBack={onBack}
-      onClose={onClose}
-    >
-      <SearchPanel fragrances={fragrances} onPick={onPick} />
-    </PickerSheet>
-  );
-}
-
 function ScanSheet({
-  zoneLabel,
   fragrances,
   onPick,
-  onBack,
   onClose,
 }: {
-  zoneLabel: string;
   fragrances: Fragrance[];
   onPick: (f: Fragrance) => void;
-  onBack: () => void;
   onClose: () => void;
 }) {
   return (
     <PickerSheet
-      zoneLabel={zoneLabel}
-      title="Scanner"
+      title="Scanner un parfum"
       icon="qr_code_scanner"
-      onBack={onBack}
       onClose={onClose}
     >
       <ScanPanel fragrances={fragrances} onPick={onPick} />
     </PickerSheet>
-  );
-}
-
-/* ---- Search panel ---------------------------------------------------- */
-
-function SearchPanel({
-  fragrances,
-  onPick,
-}: {
-  fragrances: Fragrance[];
-  onPick: (f: Fragrance) => void;
-}) {
-  const [q, setQ] = useState("");
-  const filtered = q
-    ? fragrances.filter((f) =>
-        (f.name + " " + f.brand + " " + (f.tags ?? []).join(" "))
-          .toLowerCase()
-          .includes(q.toLowerCase()),
-      )
-    : fragrances;
-
-  return (
-    <>
-      <div className="px-6 py-3">
-        <input
-          type="text"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Nom, marque, famille…"
-          className="w-full bg-transparent border-b border-outline-variant py-2 text-sm focus:outline-none focus:border-primary"
-          autoFocus
-        />
-      </div>
-      {filtered.length === 0 ? (
-        <p className="px-6 py-8 text-xs text-on-surface-variant text-center">
-          Aucun parfum trouvé.
-        </p>
-      ) : (
-        <ul className="overflow-y-auto flex-1">
-          {filtered.map((f) => (
-            <li key={f.key}>
-              <button
-                type="button"
-                onClick={() => onPick(f)}
-                className="w-full flex items-center gap-3 px-6 py-3 hover:bg-surface-container-low text-left border-b border-outline-variant/30"
-              >
-                <div className="w-10 h-12 bg-surface-container-low overflow-hidden flex-shrink-0">
-                  {f.imageUrl && (
-                    <img
-                      src={f.imageUrl}
-                      alt=""
-                      className="w-full h-full object-cover grayscale"
-                    />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] uppercase tracking-[0.15em] text-outline">
-                    {f.brand}
-                  </p>
-                  <p className="text-sm font-medium truncate">{f.name}</p>
-                </div>
-                <Icon name="add" size={18} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
   );
 }
 

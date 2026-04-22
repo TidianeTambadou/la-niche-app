@@ -12,10 +12,19 @@ import type { PlacedMarker } from "./BodySilhouette3D";
 
 export type { PlacedMarker };
 
+/** Re-export so callers can match colors used in the 3D scene
+ *  (Pose list chips, banners, etc.) without pulling three.js into their bundle. */
+export { colorForKey } from "./marker-color";
+
 type Props = {
   filledMarkers?: PlacedMarker[];
   highlightedZone?: BodyZone | null;
   onBodyClick?: (zone: BodyZone, position: [number, number, number]) => void;
+  /** When true, body taps draw a preview marker (placement is in progress).
+   *  When false, taps only zoom — no preview marker. Defaults to false. */
+  placementMode?: boolean;
+  /** Color of the preview marker. Defaults to black. */
+  previewColor?: string;
   readOnly?: boolean;
   className?: string;
 };
