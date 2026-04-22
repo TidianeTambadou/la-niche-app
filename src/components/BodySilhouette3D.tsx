@@ -29,12 +29,7 @@ import {
   type ComponentRef,
 } from "react";
 import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
-import {
-  CameraControls,
-  ContactShadows,
-  Html,
-  useGLTF,
-} from "@react-three/drei";
+import { CameraControls, Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
@@ -117,6 +112,8 @@ function Mannequin({
 }) {
   const { scene } = useGLTF(MODEL_URL);
 
+  // Apply a single matte clay material to every mesh — gives the abstract
+  // anatomical-reference look that fits the ATELIER design system.
   const clayMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
@@ -198,39 +195,43 @@ function Marker({
   const haloRef = useRef<THREE.Mesh>(null);
   const spotRef = useRef<THREE.Mesh>(null);
 
+  // Only run useFrame when this marker is highlighted — saves CPU on every
+  // other frame for non-pulsing markers (the heatmap can have many of them).
   useFrame((state) => {
-    if (!haloRef.current || !spotRef.current) return;
+    if (!highlighted || !haloRef.current || !spotRef.current) return;
     const t = state.clock.elapsedTime;
-    if (highlighted) {
-      const wave = (Math.sin(t * 2.5) + 1) / 2;
-      haloRef.current.scale.setScalar(1 + wave * 0.8);
-      (haloRef.current.material as THREE.MeshBasicMaterial).opacity =
-        0.35 - wave * 0.28;
-      spotRef.current.scale.setScalar(1 + Math.sin(t * 2.5) * 0.12);
-    } else {
-      haloRef.current.scale.setScalar(1);
-      (haloRef.current.material as THREE.MeshBasicMaterial).opacity = 0.18;
-      spotRef.current.scale.setScalar(1);
-    }
+    const wave = (Math.sin(t * 1.6) + 1) / 2;
+    haloRef.current.scale.setScalar(1 + wave * 0.55);
+    (haloRef.current.material as THREE.MeshBasicMaterial).opacity =
+      0.32 - wave * 0.22;
+    spotRef.current.scale.setScalar(1 + Math.sin(t * 1.6) * 0.08);
   });
 
   return (
     <group position={position}>
       <mesh ref={haloRef} renderOrder={2}>
-        <sphereGeometry args={[0.05, 24, 24]} />
-        <meshBasicMaterial color="#000" transparent opacity={0.18} depthTest={false} />
-      </mesh>
-      <mesh ref={spotRef} renderOrder={3}>
-        <sphereGeometry args={[0.025, 24, 24]} />
-        <meshStandardMaterial
+        {/* Lower segment count: from 24×24 to 12×12 — visually identical at
+            this size, 4× fewer triangles. */}
+        <sphereGeometry args={[0.05, 12, 12]} />
+        <meshBasicMaterial
           color="#000"
-          emissive="#000"
-          emissiveIntensity={0.4}
-          roughness={0.3}
+          transparent
+          opacity={0.18}
           depthTest={false}
         />
       </mesh>
-      {label && (
+      <mesh ref={spotRef} renderOrder={3}>
+        <sphereGeometry args={[0.025, 12, 12]} />
+        {/* Use MeshBasicMaterial: cheaper than MeshStandard (no lighting
+            calculations, depth, etc.) and the dot is so small lighting
+            wouldn't be visible anyway. */}
+        <meshBasicMaterial color="#000" depthTest={false} />
+      </mesh>
+      {/* Label rendered via DOM (Html) only on the highlighted marker —
+          drei's <Html> projects the position every frame, which adds up with
+          many markers. The Poses list below the silhouette already shows the
+          full mapping. */}
+      {label && highlighted && (
         <Html
           position={[0.05, 0.04, 0]}
           center={false}
@@ -259,27 +260,27 @@ function PreviewMarker({
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
-    const wave = (Math.sin(t * 3) + 1) / 2;
+    const wave = (Math.sin(t * 1.8) + 1) / 2;
     if (haloRef.current) {
-      haloRef.current.scale.setScalar(1 + wave * 0.7);
+      haloRef.current.scale.setScalar(1 + wave * 0.55);
       (haloRef.current.material as THREE.MeshBasicMaterial).opacity =
-        0.4 - wave * 0.32;
+        0.36 - wave * 0.28;
     }
-    // Expanding rings to mimic a "drop being drawn"
+    // Slow expanding rings — "drop being drawn", calm not frenzied
     if (ring1Ref.current) {
-      const growth = (t * 0.8) % 1.5;
-      ring1Ref.current.scale.setScalar(1 + growth * 1.5);
+      const growth = (t * 0.55) % 2;
+      ring1Ref.current.scale.setScalar(1 + growth * 1.2);
       (ring1Ref.current.material as THREE.MeshBasicMaterial).opacity = Math.max(
         0,
-        0.6 - growth * 0.4,
+        0.55 - growth * 0.3,
       );
     }
     if (ring2Ref.current) {
-      const growth = ((t + 0.75) * 0.8) % 1.5;
-      ring2Ref.current.scale.setScalar(1 + growth * 1.5);
+      const growth = ((t + 1.0) * 0.55) % 2;
+      ring2Ref.current.scale.setScalar(1 + growth * 1.2);
       (ring2Ref.current.material as THREE.MeshBasicMaterial).opacity = Math.max(
         0,
-        0.5 - growth * 0.35,
+        0.45 - growth * 0.25,
       );
     }
   });
@@ -287,21 +288,20 @@ function PreviewMarker({
   return (
     <group position={position}>
       <mesh ref={haloRef} renderOrder={2}>
-        <sphereGeometry args={[0.05, 24, 24]} />
-        <meshBasicMaterial color="#000" transparent opacity={0.4} depthTest={false} />
-      </mesh>
-      <mesh renderOrder={3}>
-        <sphereGeometry args={[0.022, 24, 24]} />
-        <meshStandardMaterial
+        <sphereGeometry args={[0.05, 12, 12]} />
+        <meshBasicMaterial
           color="#000"
-          emissive="#000"
-          emissiveIntensity={0.5}
-          roughness={0.2}
+          transparent
+          opacity={0.4}
           depthTest={false}
         />
       </mesh>
+      <mesh renderOrder={3}>
+        <sphereGeometry args={[0.022, 12, 12]} />
+        <meshBasicMaterial color="#000" depthTest={false} />
+      </mesh>
       <mesh ref={ring1Ref} rotation={[Math.PI / 2, 0, 0]} renderOrder={3}>
-        <torusGeometry args={[0.03, 0.002, 6, 32]} />
+        <torusGeometry args={[0.03, 0.002, 4, 16]} />
         <meshBasicMaterial
           color="#000"
           transparent
@@ -310,7 +310,7 @@ function PreviewMarker({
         />
       </mesh>
       <mesh ref={ring2Ref} rotation={[Math.PI / 2, 0, 0]} renderOrder={3}>
-        <torusGeometry args={[0.03, 0.0015, 6, 32]} />
+        <torusGeometry args={[0.03, 0.0015, 4, 16]} />
         <meshBasicMaterial
           color="#000"
           transparent
@@ -327,9 +327,68 @@ function PreviewMarker({
  * --------------------------------------------------------------------- */
 
 const OVERVIEW = {
-  pos: [0, 1.05, 3.7] as const,
+  pos: [0, 1.05, 2.6] as const,
   look: [0, 1.05, 0] as const,
 };
+
+/**
+ * Directional key light with shadows that auto-update DISABLED.
+ *
+ * The mannequin is static (only the camera moves) so the shadow map only
+ * needs to be rendered ONCE after the model loads. We force a single update
+ * 400ms after mount, then the shadow stays cached forever — no per-frame
+ * shadow render. This is the single biggest perf win on this scene.
+ */
+function StaticShadowKey() {
+  const ref = useRef<THREE.DirectionalLight>(null);
+
+  useEffect(() => {
+    const l = ref.current;
+    if (!l) return;
+    l.shadow.autoUpdate = false;
+    const id = setTimeout(() => {
+      if (ref.current) ref.current.shadow.needsUpdate = true;
+    }, 400);
+    return () => clearTimeout(id);
+  }, []);
+
+  return (
+    <directionalLight
+      ref={ref}
+      position={[2.4, 3.2, 2.8]}
+      intensity={1.2}
+      color="#fff2dc"
+      castShadow
+      // 1024² instead of 2048² → 4× less work for the one-shot bake, and the
+      // resulting cached shadow is plenty sharp at this scene scale.
+      shadow-mapSize-width={1024}
+      shadow-mapSize-height={1024}
+      // Tight ortho frustum: only covers the mannequin volume — every wasted
+      // pixel of shadow camera = wasted shadow render.
+      shadow-camera-near={1}
+      shadow-camera-far={6}
+      shadow-camera-left={-1.2}
+      shadow-camera-right={1.2}
+      shadow-camera-top={2.5}
+      shadow-camera-bottom={-0.2}
+      shadow-bias={-0.0005}
+    />
+  );
+}
+
+/** Invisible ground plane that catches the directional light's shadow. */
+function ShadowFloor() {
+  return (
+    <mesh
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[0, 0.001, 0]}
+      receiveShadow
+    >
+      <planeGeometry args={[3, 3]} />
+      <shadowMaterial transparent opacity={0.32} />
+    </mesh>
+  );
+}
 
 function CameraController({
   focusPoint,
@@ -343,15 +402,17 @@ function CameraController({
     if (!c) return;
     if (focusPoint) {
       const [x, y, z] = focusPoint;
-      const sideSign = Math.sign(x) || 1;
+      // Top-down 3/4 view: camera ABOVE the click point and slightly in front.
+      // This is the angle a perfumer/illustrator would use when applying — you
+      // see the surface flat, perfect for "drawing" the placement spot.
       c.setLookAt(
-        x + sideSign * 0.3,
-        y + 0.05,
-        z + 0.85,
+        x,         // same X (no lateral offset → straight from above)
+        y + 0.45,  // 45cm above the click point
+        z + 0.45,  // 45cm in front (so we look down + slightly back)
         x,
         y,
         z,
-        true, // animated
+        true, // animated (uses smoothTime for the dolly)
       );
     } else {
       c.setLookAt(
@@ -432,48 +493,37 @@ export function BodySilhouette3D({
     >
       <Canvas
         shadows
-        dpr={[1, 1.75]}
+        // dpr capped at 1.5: still sharp on retina, ~30% less GPU work than
+        // 1.75 (or browser default 2-3 on phones).
+        dpr={[1, 1.5]}
         camera={{ position: [...OVERVIEW.pos], fov: 32 }}
-        gl={{ antialias: true, alpha: true }}
+        // antialias=false: MSAA is expensive on mobile GPUs. For a clay
+        // mannequin the perceived quality loss is minimal.
+        // powerPreference: nudges discrete GPU on laptops with hybrid graphics.
+        gl={{
+          antialias: false,
+          alpha: true,
+          powerPreference: "high-performance",
+        }}
         onPointerMissed={() => !readOnly && resetView()}
       >
-        <color attach="background" args={["#f0eeea"]} />
+        <color attach="background" args={["#ece8e2"]} />
 
-        {/* Three-point studio lighting (no external HDRI — keeps the build
-            self-contained, no CSP exception needed). */}
-        <hemisphereLight args={["#f9f6f1", "#34302b", 0.45]} />
-        <ambientLight intensity={0.35} />
-        {/* Key */}
+        {/* Single ambient + 2 directionals — key + rim — instead of 4 lights.
+            Each light costs a render pass for shadows, plus per-fragment math. */}
+        <ambientLight intensity={0.55} />
+        <StaticShadowKey />
         <directionalLight
-          position={[2.2, 4, 2.5]}
-          intensity={1.1}
-          castShadow
-          shadow-mapSize-width={2048}
-          shadow-mapSize-height={2048}
-          shadow-camera-near={0.5}
-          shadow-camera-far={10}
-          shadow-camera-left={-2}
-          shadow-camera-right={2}
-          shadow-camera-top={3}
-          shadow-camera-bottom={-1}
-          shadow-bias={-0.0005}
-        />
-        {/* Fill (cooler, side) */}
-        <directionalLight
-          position={[-3, 2, 1.5]}
-          intensity={0.45}
-          color="#dee5ec"
-        />
-        {/* Rim (back) */}
-        <directionalLight
-          position={[0, 2.5, -3]}
-          intensity={0.7}
+          position={[0, 2.5, -2.5]}
+          intensity={0.6}
           color="#ffffff"
         />
 
         <Suspense fallback={null}>
           <Mannequin onBodyClick={handleBodyClick} readOnly={readOnly} />
         </Suspense>
+
+        <ShadowFloor />
 
         {/* Permanent markers */}
         {filledMarkers.map((m, i) => {
@@ -496,26 +546,23 @@ export function BodySilhouette3D({
         {/* Preview marker (the "drawn" marker while picker opens) */}
         {previewPoint && <PreviewMarker position={previewPoint} />}
 
-        {/* Soft contact shadow at the feet */}
-        <ContactShadows
-          position={[0, 0.005, 0]}
-          opacity={0.4}
-          blur={2.6}
-          scale={3}
-          far={2}
-        />
+        {/* ContactShadows removed — adds a per-frame FBO render pass.
+            The directional shadow on the floor handles ground anchoring. */}
 
         <CameraControls
           ref={controlsRef}
-          minPolarAngle={Math.PI / 2 - 0.25}
+          // Allow polar swing from ~30° (near top-down) to slightly below
+          // horizon — needed because focused zoom places camera high above.
+          minPolarAngle={Math.PI / 6}
           maxPolarAngle={Math.PI / 2 + 0.15}
-          polarRotateSpeed={0.3}
+          polarRotateSpeed={0.4}
           azimuthRotateSpeed={0.7}
           dollySpeed={0}
           truckSpeed={0}
-          minDistance={0.6}
+          minDistance={0.3}
           maxDistance={5}
-          smoothTime={0.35}
+          smoothTime={0.85}
+          draggingSmoothTime={0.18}
           enabled={!readOnly}
         />
         <CameraController
