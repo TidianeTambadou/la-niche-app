@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { clsx } from "clsx";
@@ -10,7 +10,25 @@ import { useAuth } from "@/lib/auth";
 
 type Mode = "signin" | "signup" | "magic";
 
+// `useSearchParams` opts the page into dynamic rendering; wrap in Suspense so
+// Next.js can pre-render a fallback during `next build`.
 export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-[100dvh] flex items-center justify-center">
+          <p className="text-[10px] uppercase tracking-widest text-outline">
+            Chargement…
+          </p>
+        </main>
+      }
+    >
+      <LoginContent />
+    </Suspense>
+  );
+}
+
+function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirect = searchParams.get("redirect") || "/";
