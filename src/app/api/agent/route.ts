@@ -72,6 +72,8 @@ export async function POST(req: Request) {
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
+  // eslint-disable-next-line no-console
+  console.log("[agent] apiKey present:", !!apiKey, "| env keys with ANTHROPIC:", Object.keys(process.env).filter(k => k.includes("ANTHROPIC")));
   if (!apiKey) {
     return NextResponse.json(
       {

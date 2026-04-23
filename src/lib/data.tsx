@@ -258,7 +258,12 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       setShops((shopsRes.data ?? []) as RemoteShop[]);
       setStock((stockRes.data ?? []) as RemoteStockItem[]);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Erreur de chargement";
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === "object" && e !== null && "message" in e
+            ? String((e as { message: unknown }).message)
+            : "Erreur de chargement";
       setError(msg);
       // eslint-disable-next-line no-console
       console.warn("DataProvider fetch failed:", msg);
