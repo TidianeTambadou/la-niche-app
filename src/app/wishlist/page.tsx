@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
+import { FragranceImage } from "@/components/FragranceImage";
 import { useFragrances } from "@/lib/data";
 import { useStore, type WishlistEntry } from "@/lib/store";
 
@@ -146,13 +147,23 @@ export default function WishlistPage() {
                 <div className="block w-24 aspect-[3/4] bg-surface-container-low overflow-hidden flex-shrink-0">
                   {href ? (
                     <Link href={href} className="block w-full h-full">
-                      {imageUrl && (
-                        <img src={imageUrl} alt={name} className="w-full h-full object-cover grayscale" />
-                      )}
+                      <FragranceImage
+                        src={imageUrl}
+                        name={name}
+                        brand={brand}
+                        fallbackSize="md"
+                        className="w-full h-full grayscale"
+                      />
                     </Link>
-                  ) : imageUrl ? (
-                    <img src={imageUrl} alt={name} className="w-full h-full object-cover grayscale" />
-                  ) : null}
+                  ) : (
+                    <FragranceImage
+                      src={imageUrl}
+                      name={name}
+                      brand={brand}
+                      fallbackSize="md"
+                      className="w-full h-full grayscale"
+                    />
+                  )}
                 </div>
 
                 <div className="flex-1 min-w-0">

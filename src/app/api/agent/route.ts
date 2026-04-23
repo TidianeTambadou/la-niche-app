@@ -15,6 +15,11 @@ import {
   type RecommendationCandidate,
   type SearchCandidate,
 } from "@/lib/agent";
+import {
+  BOUTIQUE_DOMAINS,
+  BOUTIQUE_IDS,
+  findBoutiqueByUrl,
+} from "@/lib/boutiques";
 
 /* ─── In-memory search cache (per Vercel instance) ─────────────────────── */
 
@@ -41,7 +46,8 @@ function rememberSearch(key: string, candidates: SearchCandidate[]) {
 
 /* ─── Tavily web search ─────────────────────────────────────────────────── */
 
-const ALLOWED_DOMAINS = [
+/** Fragrance knowledge base — notes, pyramid, reviews. */
+const FRAGRANCE_KB_DOMAINS = [
   "fragrantica.com",
   "fragrantica.fr",
   "basenotes.com",
@@ -50,27 +56,137 @@ const ALLOWED_DOMAINS = [
   "nstperfume.com",
 ];
 
-async function tavilySearch(query: string): Promise<string> {
+type TavilyResult = { title: string; url: string; content: string };
+
+async function tavilySearchRaw(
+  query: string,
+  domains: string[],
+  maxResults = 5,
+): Promise<TavilyResult[]> {
   const apiKey = process.env.TAVILY_API_KEY;
-  if (!apiKey) return "[Tavily non configuré]";
+  if (!apiKey) return [];
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       api_key: apiKey,
       query,
-      include_domains: ALLOWED_DOMAINS,
+      include_domains: domains,
       search_depth: "advanced",
-      max_results: 5,
+      max_results: maxResults,
     }),
   });
-  if (!res.ok) return `[Tavily erreur ${res.status}]`;
-  const data = (await res.json()) as {
-    results?: Array<{ title: string; url: string; content: string }>;
-  };
-  return (data.results ?? [])
+  if (!res.ok) return [];
+  const data = (await res.json()) as { results?: TavilyResult[] };
+  return data.results ?? [];
+}
+
+/** Pretty-formatted string of results — used by search/identify/ask modes. */
+async function tavilySearch(
+  query: string,
+  domains: string[] = FRAGRANCE_KB_DOMAINS,
+): Promise<string> {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) return "[Tavily non configuré]";
+  const results = await tavilySearchRaw(query, domains);
+  if (results.length === 0) return "[Tavily: aucun résultat]";
+  return results
     .map((r) => `## ${r.title}\nSource: ${r.url}\n${r.content}`)
     .join("\n\n---\n\n");
+}
+
+/* ─── Boutique catalog discovery ─────────────────────────────────────────
+ * Run parallel Tavily searches scoped to the 4 partner boutique domains so
+ * the Curator can prioritise parfums the user can actually walk in and
+ * smell. Results are tagged with the boutique shortLabel and city.
+ * ---------------------------------------------------------------------- */
+
+type BoutiqueHit = {
+  boutiqueId: string;
+  boutiqueLabel: string;
+  city: string;
+  title: string;
+  url: string;
+  content: string;
+};
+
+function buildBoutiqueQueries(
+  dna: OlfactiveDNA,
+  liked: Array<{ brand: string; name: string }>,
+): string[] {
+  const queries: string[] = [];
+  const keyNotes = dna.key_notes.slice(0, 3).filter(Boolean);
+  const accord = dna.dominant_accords[0];
+  if (keyNotes.length > 0) {
+    queries.push(`parfum niche ${keyNotes.join(" ")}`);
+  }
+  if (accord) {
+    queries.push(`parfum ${accord}`);
+  }
+  if (liked.length > 0) {
+    queries.push(`parfum similaire ${liked[0].brand} ${liked[0].name}`);
+  }
+  if (queries.length === 0) {
+    queries.push("parfum niche");
+  }
+  return queries.slice(0, 3);
+}
+
+async function searchBoutiques(
+  dna: OlfactiveDNA,
+  liked: Array<{ brand: string; name: string }>,
+): Promise<BoutiqueHit[]> {
+  const queries = buildBoutiqueQueries(dna, liked);
+  const raw = await Promise.all(
+    queries.map((q) =>
+      tavilySearchRaw(q, BOUTIQUE_DOMAINS, 6).catch(() => []),
+    ),
+  );
+  const hits: BoutiqueHit[] = [];
+  const seen = new Set<string>();
+  for (const results of raw) {
+    for (const r of results) {
+      if (seen.has(r.url)) continue;
+      seen.add(r.url);
+      const b = findBoutiqueByUrl(r.url);
+      if (!b) continue;
+      hits.push({
+        boutiqueId: b.id,
+        boutiqueLabel: b.shortLabel,
+        city: b.city,
+        title: r.title,
+        url: r.url,
+        content: r.content,
+      });
+    }
+  }
+  return hits;
+}
+
+function formatBoutiqueHits(hits: BoutiqueHit[]): string {
+  if (hits.length === 0) {
+    return "(Aucun résultat boutique — pipeline Tavily sans match. Propose quand même des parfums cohérents et renseigne available_at: [].)";
+  }
+  // Group by boutique so the Curator sees a clear catalog per shop.
+  const byShop = new Map<string, BoutiqueHit[]>();
+  for (const h of hits) {
+    const list = byShop.get(h.boutiqueId) ?? [];
+    list.push(h);
+    byShop.set(h.boutiqueId, list);
+  }
+  const blocks: string[] = [];
+  for (const [id, items] of byShop) {
+    const label = items[0].boutiqueLabel;
+    const city = items[0].city;
+    const lines = items
+      .map(
+        (h) =>
+          `  • ${h.title}\n    URL: ${h.url}\n    Extrait: ${h.content.slice(0, 180)}`,
+      )
+      .join("\n");
+    blocks.push(`=== BOUTIQUE id="${id}" — ${label} (${city}) ===\n${lines}`);
+  }
+  return blocks.join("\n\n");
 }
 
 /* ─── OpenRouter call (OpenAI-compatible) ───────────────────────────────── */
@@ -369,21 +485,29 @@ export async function POST(req: Request) {
         }
       }
 
-      /* Stage 3 — Researcher does parallel targeted searches */
-      const candidateResults = await Promise.all(
-        searchQueries.slice(0, 4).map((q) => tavilySearch(q).catch(() => "")),
-      );
+      /* Stage 3 — Researcher does parallel targeted searches (knowledge base
+         + boutique catalogs in parallel). Boutique hits let the Curator
+         prioritise parfums the user can actually smell in-store. */
+      const [candidateResults, boutiqueHits] = await Promise.all([
+        Promise.all(
+          searchQueries.slice(0, 4).map((q) =>
+            tavilySearch(q, FRAGRANCE_KB_DOMAINS).catch(() => ""),
+          ),
+        ),
+        searchBoutiques(dna, likedFragrances),
+      ]);
       const combinedCandidates = candidateResults
         .map((r, i) => `=== Recherche ${i + 1}: "${searchQueries[i]}" ===\n${r}`)
         .join("\n\n");
+      const boutiqueSection = formatBoutiqueHits(boutiqueHits);
 
       /* Stage 4 — Curator ranks candidates strictly against the DNA */
       const exclusionList = [...likedFragrances, ...dislikedFragrances]
         .map((f) => `${f.brand} ${f.name}`)
         .join(" | ");
 
-      // Scale the token budget with count: curator output is ~200 tok/rec
-      const curatorMaxTokens = Math.max(1500, safeCount * 220);
+      // Scale the token budget with count: curator output is ~220 tok/rec
+      const curatorMaxTokens = Math.max(1800, safeCount * 240);
 
       const curatorRaw = await openRouterCall(
         apiKey,
@@ -404,10 +528,15 @@ ${likedList}
 
 À EXCLURE (déjà connus) : ${exclusionList || "—"}
 
-RÉSULTATS FRAGRANTICA (candidats) :
+=== RÉSULTATS BOUTIQUES PARTENAIRES ★ PRIORISE CES PARFUMS ★ ===
+Ce sont les parfums réellement en stock chez nos 4 boutiques partenaires que l'utilisateur peut aller sentir. Au moins 70% de tes recommandations doivent venir de cette liste. Remplis \`available_at\` avec les IDs des boutiques où chaque parfum apparaît.
+
+${boutiqueSection}
+
+=== RÉSULTATS FRAGRANTICA (connaissance des notes/pyramides) ===
 ${combinedCandidates}
 
-Sélectionne EXACTEMENT ${safeCount} parfums DIFFÉRENTS des parfums aimés/rejetés, qui respectent les contraintes absolues du system prompt. Chaque \`reason\` DOIT citer 1-2 notes spécifiques qui correspondent à key_notes.`,
+Sélectionne EXACTEMENT ${safeCount} parfums DIFFÉRENTS des parfums aimés/rejetés. Règles absolues du system prompt + priorité forte aux parfums boutiques. Chaque \`reason\` DOIT citer 1-2 notes spécifiques qui correspondent à key_notes.`,
           },
         ],
         curatorMaxTokens,
@@ -421,26 +550,67 @@ Sélectionne EXACTEMENT ${safeCount} parfums DIFFÉRENTS des parfums aimés/reje
       )
         .filter((r) => r.name && r.brand)
         .slice(0, safeCount)
-        .map((r) => ({
-          name: r.name!,
-          brand: r.brand!,
-          family: r.family ?? "—",
-          notes_brief: r.notes_brief ?? "",
-          reason: r.reason ?? "",
-          projection: r.projection ?? "",
-          match_score: Math.min(
-            99,
-            Math.max(50, Math.round(r.match_score ?? 75)),
-          ),
-          image_url:
-            r.image_url &&
-            /^https?:\/\/.+\.(jpe?g|png|webp)(\?.*)?$/i.test(r.image_url)
-              ? r.image_url
-              : undefined,
-          source_url:
-            r.source_url ??
-            `https://www.fragrantica.com/search/?query=${encodeURIComponent(`${r.brand} ${r.name}`)}`,
-        }));
+        .map((r) => {
+          // Tolerate both array and comma-separated-string shapes. LLMs
+          // occasionally drift from the schema; we coerce back to arrays.
+          const toArray = (v: unknown): string[] => {
+            if (Array.isArray(v)) return v.filter((x) => typeof x === "string");
+            if (typeof v === "string")
+              return v
+                .split(/[,;·]/)
+                .map((s) => s.trim())
+                .filter(Boolean);
+            return [];
+          };
+          // LLM-claimed availability, clamped to known boutique IDs.
+          const claimedAvailable = toArray(
+            (r as Partial<RecommendationCandidate>).available_at,
+          ).filter((id) => BOUTIQUE_IDS.includes(id));
+
+          // Post-hoc enrichment: some models forget to fill available_at
+          // even when the parfum clearly appears in a boutique result.
+          // Scan boutique hits for the brand+name substring.
+          const needle = `${r.brand} ${r.name}`.toLowerCase();
+          const brandOnly = (r.brand ?? "").toLowerCase();
+          const nameOnly = (r.name ?? "").toLowerCase();
+          const inferred = new Set<string>(claimedAvailable);
+          for (const hit of boutiqueHits) {
+            const hay = `${hit.title} ${hit.content}`.toLowerCase();
+            const matchesBoth =
+              hay.includes(brandOnly) && hay.includes(nameOnly);
+            const matchesFull = hay.includes(needle);
+            if (matchesBoth || matchesFull) inferred.add(hit.boutiqueId);
+          }
+
+          return {
+            name: r.name!,
+            brand: r.brand!,
+            family: r.family ?? "—",
+            notes_brief: r.notes_brief ?? "",
+            notes_top: toArray(r.notes_top).slice(0, 5),
+            notes_heart: toArray(r.notes_heart).slice(0, 5),
+            notes_base: toArray(r.notes_base).slice(0, 5),
+            price_range:
+              typeof r.price_range === "string" && r.price_range.trim()
+                ? r.price_range.trim()
+                : "—",
+            reason: r.reason ?? "",
+            projection: r.projection ?? "",
+            match_score: Math.min(
+              99,
+              Math.max(50, Math.round(r.match_score ?? 75)),
+            ),
+            available_at: Array.from(inferred),
+            image_url:
+              r.image_url &&
+              /^https?:\/\/.+\.(jpe?g|png|webp)(\?.*)?$/i.test(r.image_url)
+                ? r.image_url
+                : undefined,
+            source_url:
+              r.source_url ??
+              `https://www.fragrantica.com/search/?query=${encodeURIComponent(`${r.brand} ${r.name}`)}`,
+          };
+        });
 
       return NextResponse.json({
         ok: true,

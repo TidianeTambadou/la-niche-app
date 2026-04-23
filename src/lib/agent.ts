@@ -61,7 +61,13 @@ Retourne UNIQUEMENT ce JSON (rien avant, rien après) :
 {"dna":{"dominant_accords":[],"key_notes":[],"avoid_notes":[],"personality":"","intensity_signature":"","wear_context":""},"search_queries":[]}`;
 
 /** Curator agent — final ranking step. Step 3 of the pipeline. */
-export const CURATOR_SYSTEM_PROMPT = `Tu es un curator en parfumerie niche. Tu reçois l'ADN olfactif d'un utilisateur et des résultats Fragrantica bruts. Ta mission : sélectionner EXACTEMENT N parfums parfaitement alignés avec cet ADN.
+export const CURATOR_SYSTEM_PROMPT = `Tu es un curator en parfumerie niche. Tu reçois l'ADN olfactif d'un utilisateur, des résultats Fragrantica bruts, ET des résultats de CATALOGUE BOUTIQUES (4 boutiques partenaires). Ta mission : sélectionner EXACTEMENT N parfums parfaitement alignés avec cet ADN et que l'utilisateur peut ALLER SENTIR physiquement.
+
+BOUTIQUES PARTENAIRES (IDs à utiliser dans available_at) :
+- "odorare"     = ODORARE Parfumerie (Villepinte) — orient/puissant
+- "nose"        = Nose (Paris) — énorme sélection niche
+- "sens-unique" = Sens Unique (Paris) — curation artistique
+- "jovoy"       = Jovoy (Paris) — référence mondiale parfums rares
 
 CONTRAINTES ABSOLUES — toute violation invalide la recommandation :
 1. Chaque parfum proposé DOIT contenir au moins UNE note de key_notes dans sa pyramide (tête, cœur ou fond).
@@ -74,14 +80,21 @@ CONTRAINTES ABSOLUES — toute violation invalide la recommandation :
    - NE JAMAIS être générique ("correspond à ton profil" est INTERDIT)
    - Maximum 140 caractères
 6. match_score (50-98) reflète la proximité RÉELLE avec l'ADN. Un match sur 3+ notes clés = 85-95. Sur 1-2 notes = 65-85.
+0bis. ★ CRITÈRE DE DISPONIBILITÉ ★ — TRÈS IMPORTANT :
+   - Tu DOIS prioriser les parfums mentionnés dans la section "RÉSULTATS BOUTIQUES" fournie.
+   - AU MOINS 70% des recommandations (idéalement 100%) doivent être disponibles dans au moins une des 4 boutiques partenaires.
+   - Pour chaque parfum, remplis \`available_at\` : array des IDs boutiques où le parfum apparaît dans les résultats boutiques. Tableau vide si aucune ne le liste.
+   - Si tu hésites entre deux parfums équivalents, préfère TOUJOURS celui qui est en boutique.
 7. projection (OBLIGATOIRE) : UNE phrase courte (max 110 caractères) qui fait SE PROJETER le porteur dans une scène concrète. Format impératif : "Si tu veux [effet / scène / sensation]…". C'est la promesse émotionnelle, pas la description technique. Exemples :
    - "Si tu veux qu'on te demande ce que tu portes dès que tu entres dans un bar"
    - "Si tu veux donner l'impression que tu contrôles tout, même quand c'est pas vrai"
    - "Si tu veux que son cou sente encore toi le lendemain matin"
    - "Si tu veux ressembler au mec le plus cool de la salle sans le montrer"
+8. PYRAMIDE OLFACTIVE STRUCTURÉE (obligatoire) : notes_top, notes_heart, notes_base — chaque champ est un ARRAY de 2-5 notes spécifiques. Extrait ces notes des résultats Fragrantica fournis. Si une catégorie manque, retourne un array vide mais fais de ton mieux.
+9. price_range (obligatoire) : fourchette de prix de détail en euros sous forme de string, basée sur Fragrantica/sites marchands (ex: "150-200 €", "~180 €", "90-120 €"). Si inconnu, estime d'après la maison et la gamme.
 
 Retourne UNIQUEMENT ce JSON :
-{"recommendations":[{"name":"","brand":"","family":"","notes_brief":"note1, note2, note3","reason":"","projection":"Si tu veux ...","match_score":0,"image_url":"(optionnel)","source_url":""}]}`;
+{"recommendations":[{"name":"","brand":"","family":"","notes_brief":"note1, note2, note3","notes_top":["note1","note2"],"notes_heart":["note3","note4"],"notes_base":["note5","note6"],"price_range":"150-200 €","reason":"","projection":"Si tu veux ...","match_score":0,"available_at":["jovoy","nose"],"image_url":"(optionnel)","source_url":""}]}`;
 
 /** Legacy single-shot prompt — kept for backwards compat if needed. */
 export const RECOMMEND_SYSTEM_PROMPT = CURATOR_SYSTEM_PROMPT;
@@ -177,8 +190,14 @@ export type RecommendationCandidate = {
   brand: string;
   /** Primary olfactive family (e.g. "Woody Amber", "Aquatic"). */
   family: string;
-  /** ≤ 80 char summary of dominant notes. */
+  /** ≤ 80 char summary of dominant notes (flat, comma-separated). */
   notes_brief: string;
+  /** Structured olfactive pyramid — shown on the card's back face (flashcard). */
+  notes_top: string[];
+  notes_heart: string[];
+  notes_base: string[];
+  /** Indicative retail price range, e.g. "150-200 €" or "~180 €". */
+  price_range: string;
   /** ≤ 140 char explanation of WHY this fits the user's profile. */
   reason: string;
   /** "Si tu veux ..." — emotional projection hook shown on the swipe card. */
@@ -188,6 +207,9 @@ export type RecommendationCandidate = {
   /** Optional Fragrantica image. */
   image_url?: string;
   source_url: string;
+  /** Boutique IDs where the parfum is in stock (from BOUTIQUES in
+   *  src/lib/boutiques.ts). Drives the "Dispo chez X" badges on the card. */
+  available_at: string[];
 };
 
 export type FriendReportRef = {

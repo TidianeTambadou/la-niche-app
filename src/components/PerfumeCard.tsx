@@ -7,6 +7,7 @@ import type { Fragrance } from "@/lib/fragrances";
 import { useStore } from "@/lib/store";
 import { Icon } from "@/components/Icon";
 import { AddToBaladeSheet } from "@/components/AddToBaladeSheet";
+import { FragranceImage } from "@/components/FragranceImage";
 
 type Variant = "list" | "feature" | "compact";
 
@@ -74,13 +75,13 @@ export function PerfumeCard({
           className="group block min-w-[180px] flex-shrink-0"
         >
           <div className="relative aspect-[3/4] bg-surface-container-low overflow-hidden">
-            {fragrance.imageUrl && (
-              <img
-                src={fragrance.imageUrl}
-                alt={fragrance.name}
-                className="w-full h-full object-cover grayscale contrast-110 group-hover:grayscale-0 transition-all duration-700"
-              />
-            )}
+            <FragranceImage
+              src={fragrance.imageUrl}
+              name={fragrance.name}
+              brand={fragrance.brand}
+              fallbackSize="md"
+              className="w-full h-full grayscale contrast-110 group-hover:grayscale-0 transition-all duration-700"
+            />
             <div className="absolute top-2 left-2">
               <span className="text-[9px] uppercase tracking-widest font-mono bg-background/90 px-2 py-0.5 border border-outline-variant">
                 {fragrance.reference}
@@ -112,13 +113,13 @@ export function PerfumeCard({
         <article className="bg-surface-container-lowest border border-outline-variant/40">
           <Link href={`/fragrance/${fragrance.id}`} className="block">
             <div className="relative aspect-[4/5] bg-surface-container-low overflow-hidden">
-              {fragrance.imageUrl && (
-                <img
-                  src={fragrance.imageUrl}
-                  alt={fragrance.name}
-                  className="w-full h-full object-cover grayscale contrast-110 hover:scale-105 transition-transform duration-700"
-                />
-              )}
+              <FragranceImage
+                src={fragrance.imageUrl}
+                name={fragrance.name}
+                brand={fragrance.brand}
+                fallbackSize="lg"
+                className="w-full h-full grayscale contrast-110 hover:scale-105 transition-transform duration-700"
+              />
               <div className="absolute top-3 left-3">
                 <span className="text-[10px] uppercase tracking-widest font-mono bg-background/90 px-2 py-1 border border-outline-variant">
                   REF: {fragrance.reference}
@@ -186,13 +187,13 @@ export function PerfumeCard({
           className="col-span-5 group block"
         >
           <div className="relative aspect-[3/4] bg-surface-container-low overflow-hidden">
-            {fragrance.imageUrl && (
-              <img
-                src={fragrance.imageUrl}
-                alt={fragrance.name}
-                className="w-full h-full object-cover grayscale contrast-110 group-hover:grayscale-0 transition-all duration-700"
-              />
-            )}
+            <FragranceImage
+              src={fragrance.imageUrl}
+              name={fragrance.name}
+              brand={fragrance.brand}
+              fallbackSize="md"
+              className="w-full h-full grayscale contrast-110 group-hover:grayscale-0 transition-all duration-700"
+            />
             <div className="absolute top-2 left-2">
               <span className="text-[9px] uppercase tracking-widest font-mono bg-background/90 px-2 py-0.5 border border-outline-variant">
                 {fragrance.reference}

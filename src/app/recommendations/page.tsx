@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { clsx } from "clsx";
+import { FragranceImage } from "@/components/FragranceImage";
 import { Icon } from "@/components/Icon";
 import { useAuth } from "@/lib/auth";
+import { findBoutiqueById } from "@/lib/boutiques";
 import { useStore } from "@/lib/store";
 import {
   readProfileFromUser,
@@ -269,6 +271,11 @@ export default function RecommendationsPage() {
   const [dragX, setDragX] = useState(0);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
+  const dragStartY = useRef(0);
+  const dragMoved = useRef(false);
+
+  // Flashcard flip state — reset when moving to the next card
+  const [flipped, setFlipped] = useState(false);
 
   const profile = readProfileFromUser(user);
 
@@ -376,6 +383,7 @@ export default function RecommendationsPage() {
     window.setTimeout(() => {
       setCardExiting(null);
       setDragX(0);
+      setFlipped(false);
       if (idx + 1 >= recs.length) {
         setPhase("done");
       } else {
@@ -384,21 +392,34 @@ export default function RecommendationsPage() {
     }, 380);
   }
 
-  /* Drag handlers */
+  /* Drag / tap handlers. A movement < 10 px is treated as a tap → flip the
+   * card; larger horizontal movement triggers a swipe decision. */
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (cardExiting) return;
     isDragging.current = true;
+    dragMoved.current = false;
     dragStartX.current = e.clientX;
+    dragStartY.current = e.clientY;
     e.currentTarget.setPointerCapture(e.pointerId);
   }
   function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
     if (!isDragging.current || cardExiting) return;
-    setDragX(e.clientX - dragStartX.current);
+    const dx = e.clientX - dragStartX.current;
+    const dy = e.clientY - dragStartY.current;
+    if (Math.abs(dx) > 6 || Math.abs(dy) > 6) dragMoved.current = true;
+    // Only apply horizontal drag visually — avoid fighting vertical scroll
+    setDragX(dx);
   }
   function onPointerUp() {
     if (!isDragging.current) return;
     isDragging.current = false;
     const current = dragX;
+    if (!dragMoved.current) {
+      // Tap — flip the flashcard
+      setFlipped((f) => !f);
+      setDragX(0);
+      return;
+    }
     if (Math.abs(current) > 90) {
       decide(current > 0 ? "liked" : "disliked");
     } else {
@@ -573,7 +594,7 @@ export default function RecommendationsPage() {
               zIndex: 0,
             }}
           >
-            <SwipeCard card={nextCard} />
+            <SwipeCard card={nextCard} flipped={false} />
           </div>
         )}
 
@@ -603,7 +624,11 @@ export default function RecommendationsPage() {
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
           >
-            <SwipeCard card={currentCard} dragIntent={dragIntent} />
+            <SwipeCard
+              card={currentCard}
+              dragIntent={dragIntent}
+              flipped={flipped}
+            />
           </div>
         )}
       </div>
@@ -1094,16 +1119,13 @@ function DoneView({
                 className="flex items-center gap-3 py-3 border-b border-outline-variant/30 last:border-0"
               >
                 <div className="w-12 h-16 bg-surface-container-low overflow-hidden flex-shrink-0">
-                  {c.image_url && (
-                    <img
-                      src={c.image_url}
-                      alt={c.name}
-                      className="w-full h-full object-cover grayscale"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = "none";
-                      }}
-                    />
-                  )}
+                  <FragranceImage
+                    src={c.image_url ?? null}
+                    name={c.name}
+                    brand={c.brand}
+                    fallbackSize="sm"
+                    className="w-full h-full grayscale"
+                  />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[10px] uppercase tracking-widest text-outline">
@@ -1182,30 +1204,56 @@ function DoneView({
 }
 
 /* ========================================================================
- * Swipe Card — the actual Tinder-style fragrance card
+ * Swipe Card — 3D flashcard.
+ *   Front = Tinder-style image card with projection line
+ *   Back  = olfactive pyramid (top/heart/base) + price
+ * Tap toggles the flip; horizontal drag triggers swipe.
  * ====================================================================== */
 
 function SwipeCard({
+  card,
+  dragIntent,
+  flipped,
+}: {
+  card: RecommendationCandidate;
+  dragIntent?: "liked" | "disliked" | null;
+  flipped: boolean;
+}) {
+  return (
+    <div className="flashcard-surface w-full h-full">
+      <div
+        className={clsx(
+          "flashcard-inner shadow-xl",
+          flipped && "is-flipped",
+        )}
+      >
+        <div className="flashcard-face">
+          <SwipeCardFront card={card} dragIntent={dragIntent} />
+        </div>
+        <div className="flashcard-face flashcard-face--back">
+          <SwipeCardBack card={card} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SwipeCardFront({
   card,
   dragIntent,
 }: {
   card: RecommendationCandidate;
   dragIntent?: "liked" | "disliked" | null;
 }) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const fallback = `https://placehold.co/600x900/0a0a0a/e2e2e2?font=montserrat&text=${encodeURIComponent(card.name)}`;
-  const imageUrl = !imgFailed && card.image_url ? card.image_url : fallback;
-
   return (
-    <div className="relative w-full h-full overflow-hidden bg-background border border-outline-variant shadow-xl">
-      {/* Background image */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={imageUrl}
-        alt={card.name}
-        draggable={false}
-        className="absolute inset-0 w-full h-full object-cover grayscale select-none"
-        onError={() => setImgFailed(true)}
+    <div className="relative w-full h-full overflow-hidden bg-background border border-outline-variant">
+      {/* Background image — falls back to monogram if URL missing/broken */}
+      <FragranceImage
+        src={card.image_url ?? null}
+        name={card.name}
+        brand={card.brand}
+        fallbackSize="xl"
+        className="absolute inset-0 w-full h-full grayscale"
       />
 
       {/* Readability gradient */}
@@ -1224,10 +1272,18 @@ function SwipeCard({
         </span>
       </div>
 
+      {/* Flip affordance (top-left) */}
+      <div className="absolute top-3 left-3 bg-background/90 px-2.5 py-1 border border-outline-variant flex items-center gap-1.5">
+        <Icon name="touch_app" size={11} className="text-on-background" />
+        <span className="text-[9px] font-mono font-bold text-on-background tracking-widest uppercase">
+          Tap · notes
+        </span>
+      </div>
+
       {/* Drag intent stamps */}
       {dragIntent === "liked" && (
         <div
-          className="absolute top-8 left-5 -rotate-[18deg] border-4 border-white text-white px-5 py-2 text-3xl font-black tracking-widest"
+          className="absolute top-20 left-5 -rotate-[18deg] border-4 border-white text-white px-5 py-2 text-3xl font-black tracking-widest"
           style={{ textShadow: "0 2px 10px rgba(0,0,0,0.6)" }}
         >
           MATCH ♥
@@ -1235,7 +1291,7 @@ function SwipeCard({
       )}
       {dragIntent === "disliked" && (
         <div
-          className="absolute top-8 right-5 rotate-[18deg] border-4 border-white text-white px-5 py-2 text-3xl font-black tracking-widest"
+          className="absolute top-20 right-5 rotate-[18deg] border-4 border-white text-white px-5 py-2 text-3xl font-black tracking-widest"
           style={{ textShadow: "0 2px 10px rgba(0,0,0,0.6)" }}
         >
           PASS ✗
@@ -1257,15 +1313,30 @@ function SwipeCard({
           </span>
         )}
 
+        {card.available_at.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-3">
+            <Icon name="storefront" size={11} className="text-white/70" />
+            <span className="text-[9px] uppercase tracking-[0.25em] text-white/70">
+              Dispo
+            </span>
+            {card.available_at.map((id) => {
+              const b = findBoutiqueById(id);
+              if (!b) return null;
+              return (
+                <span
+                  key={id}
+                  className="text-[9px] uppercase tracking-widest font-bold text-white bg-primary/80 backdrop-blur-sm px-2 py-0.5"
+                >
+                  {b.shortLabel}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
         {card.projection && (
           <p className="text-[13px] italic text-white font-medium leading-snug mb-3 drop-shadow">
             &ldquo;{card.projection}&rdquo;
-          </p>
-        )}
-
-        {card.notes_brief && (
-          <p className="text-[11px] text-white/75 mb-3 leading-relaxed">
-            {card.notes_brief}
           </p>
         )}
 
@@ -1299,6 +1370,177 @@ function SwipeCard({
   );
 }
 
+function SwipeCardBack({ card }: { card: RecommendationCandidate }) {
+  const hasAnyNotes =
+    card.notes_top.length + card.notes_heart.length + card.notes_base.length >
+    0;
+  return (
+    <div className="relative w-full h-full overflow-hidden bg-background border border-outline-variant flex flex-col">
+      {/* Header */}
+      <div className="px-5 pt-5 pb-4 border-b border-outline-variant/50">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[9px] uppercase tracking-[0.3em] text-outline mb-1">
+              {card.brand}
+            </p>
+            <h2 className="text-xl font-bold tracking-tight leading-tight">
+              {card.name}
+            </h2>
+          </div>
+          <div className="flex flex-col items-end gap-1 flex-shrink-0">
+            <span className="text-[9px] uppercase tracking-widest text-outline">
+              Prix
+            </span>
+            <span className="text-sm font-mono font-bold tracking-tight">
+              {card.price_range || "—"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Pyramid + availability */}
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+        {hasAnyNotes ? (
+          <div className="space-y-5">
+            <NotesLayer
+              label="Notes de tête"
+              timing="T+0 → T+15 min"
+              notes={card.notes_top}
+              shape="round"
+            />
+            <NotesLayer
+              label="Notes de cœur"
+              timing="T+30 min → T+4 h"
+              notes={card.notes_heart}
+              shape="square"
+            />
+            <NotesLayer
+              label="Notes de fond"
+              timing="T+6 h → T+24 h"
+              notes={card.notes_base}
+              shape="bar"
+            />
+          </div>
+        ) : (
+          <p className="text-sm text-outline italic">
+            Pyramide olfactive non détaillée.
+          </p>
+        )}
+
+        {card.available_at.length > 0 && (
+          <div className="mt-6 pt-5 border-t border-outline-variant/50">
+            <div className="flex items-center gap-2 mb-3">
+              <Icon name="storefront" size={13} className="text-primary" />
+              <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-outline">
+                Où le sentir
+              </p>
+            </div>
+            <ul className="flex flex-col gap-2">
+              {card.available_at.map((id) => {
+                const b = findBoutiqueById(id);
+                if (!b) return null;
+                return (
+                  <li key={id}>
+                    <a
+                      href={b.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="flex items-center gap-3 border border-outline-variant/60 px-3 py-2.5 hover:border-primary transition-all active:scale-[0.99]"
+                    >
+                      <div className="w-9 h-9 flex-shrink-0 bg-primary text-on-primary flex items-center justify-center font-mono font-black text-[11px] tracking-widest">
+                        {b.shortLabel.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-semibold tracking-tight leading-tight">
+                          {b.name}
+                        </p>
+                        <p className="text-[10px] uppercase tracking-widest text-outline mt-0.5">
+                          {b.city} · {b.note}
+                        </p>
+                      </div>
+                      <Icon
+                        name="open_in_new"
+                        size={14}
+                        className="text-outline flex-shrink-0"
+                      />
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* Footer — match strip */}
+      <div className="px-5 py-4 border-t border-outline-variant/50 flex items-center justify-between">
+        <a
+          href={card.source_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="text-[10px] uppercase tracking-widest font-bold text-outline hover:text-primary transition-colors flex items-center gap-1 cursor-pointer"
+        >
+          <Icon name="open_in_new" size={12} />
+          Source
+        </a>
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] font-mono font-bold text-outline tracking-widest">
+            {card.match_score}% MATCH
+          </span>
+          <Icon name="flip" size={14} className="text-outline" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NotesLayer({
+  label,
+  timing,
+  notes,
+  shape,
+}: {
+  label: string;
+  timing: string;
+  notes: string[];
+  shape: "round" | "square" | "bar";
+}) {
+  return (
+    <div>
+      <p className="text-[10px] font-mono uppercase tracking-widest text-outline">
+        {timing}
+      </p>
+      <h3 className="text-lg font-bold tracking-tight mb-2">{label}</h3>
+      {notes.length > 0 ? (
+        <ul className="flex flex-col gap-1.5">
+          {notes.map((n) => (
+            <li key={n} className="flex items-center gap-2.5">
+              <span
+                className={clsx(
+                  "flex-shrink-0",
+                  shape === "round" &&
+                    "w-2 h-2 rounded-full border border-primary",
+                  shape === "square" && "w-2 h-2 bg-primary",
+                  shape === "bar" && "w-2 h-4 bg-primary",
+                )}
+              />
+              <span className="text-[12px] uppercase font-bold tracking-widest">
+                {n}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[11px] text-outline italic">Non documenté.</p>
+      )}
+    </div>
+  );
+}
+
 /* ========================================================================
  * Mode picker — "Pour moi" vs "Pour un ami"
  * ====================================================================== */
@@ -1326,6 +1568,11 @@ function ModePickerView({
         <p className="text-sm text-on-surface-variant mt-4 leading-relaxed">
           Soit tu découvres tes propres parfums, soit tu aides un pote à
           trouver le sien — avec un rapport à transmettre à son vendeur.
+        </p>
+        <p className="text-[11px] text-outline mt-3 flex items-center gap-1.5">
+          <Icon name="storefront" size={12} />
+          Recommandations priorisées sur les stocks Jovoy · Nose · Sens
+          Unique · ODORARE.
         </p>
       </header>
 
