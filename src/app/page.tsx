@@ -5,85 +5,176 @@ import { Icon } from "@/components/Icon";
 import { PerfumeCard } from "@/components/PerfumeCard";
 import { NewsRail } from "@/components/NewsRail";
 import { latestNews } from "@/lib/news";
-import {
-  shopOpenNow,
-  useData,
-  useFragrances,
-  useShops,
-} from "@/lib/data";
+import { useData, useFragrances } from "@/lib/data";
+import { useAuth } from "@/lib/auth";
+import { readProfileFromUser, FAMILY_VULGAR } from "@/lib/profile";
+
+/* ─── Phrases éditoriales — rotation par jour ─────────────────────────── */
+
+const PHRASES = [
+  "Le parfum est la mémoire la plus fidèle.",
+  "Sentir, c'est voyager sans bouger.",
+  "Une fragrance, un instant, un soi différent.",
+  "Le nez précède les yeux.",
+  "Ce que le temps efface, le parfum le garde.",
+  "L'invisible laisse les traces les plus profondes.",
+  "Chaque note est une décision.",
+  "L'atelier commence par le silence.",
+  "Ce qui disparaît reste le plus longtemps.",
+  "Le luxe n'est pas visible, il est respiré.",
+  "Un parfum ne se choisit pas — il se reconnaît.",
+  "La peau est la dernière surface libre.",
+  "Une odeur n'a pas de visage, elle a une présence.",
+  "Le sillage est ce qu'on laisse sans le dire.",
+  "Toute composition est une autobiographie.",
+];
+
+function phraseOfDay(): string {
+  const day = Math.floor(Date.now() / 86_400_000);
+  return PHRASES[day % PHRASES.length];
+}
+
+/* ─── Page ─────────────────────────────────────────────────────────────── */
 
 export default function HomePage() {
-  const { loading, error } = useData();
-  const shops = useShops();
+  const { loading } = useData();
   const fragrances = useFragrances();
+  const { user } = useAuth();
+  const profile = readProfileFromUser(user);
   const news = latestNews(6);
   const suggestions = fragrances.slice(0, 6);
 
+  const today = new Date().toLocaleDateString("fr-FR", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+  });
+
   return (
     <div className="px-6 pt-4 pb-12">
-      {/* Welcome */}
-      <section className="mb-10">
-        <span className="text-[10px] uppercase tracking-[0.3em] text-outline mb-3 block">
-          Bienvenue
-        </span>
-        <h1 className="text-4xl font-bold tracking-tighter leading-none">
-          Quel parcours olfactif aujourd&apos;hui ?
-        </h1>
+
+      {/* ── Hero éditorial ──────────────────────────────────────────────── */}
+      <section className="mb-14 pt-2">
+        <p className="text-[10px] font-mono text-outline uppercase tracking-[0.2em] mb-8">
+          {today}
+        </p>
+        <blockquote className="text-[2rem] font-extralight italic tracking-tight leading-[1.2] text-on-background mb-8">
+          &laquo;&thinsp;{phraseOfDay()}&thinsp;&raquo;
+        </blockquote>
+        <div className="h-px bg-outline-variant/50" />
       </section>
 
-      {error && (
-        <div className="mb-8 border border-error/40 bg-error-container/20 px-4 py-3">
-          <p className="text-xs text-error">
-            Erreur de chargement : {error}
-          </p>
-        </div>
-      )}
-
-      {/* Actualité parfum de niche */}
+      {/* ── Actions rapides ─────────────────────────────────────────────── */}
       <section className="mb-12">
-        <div className="flex justify-between items-end mb-4">
-          <h2 className="text-[10px] uppercase tracking-[0.2em] font-bold">
-            Actualité
-          </h2>
-          <span className="text-[10px] font-mono text-outline">
-            {new Date().toLocaleDateString("fr-FR", {
-              day: "2-digit",
-              month: "short",
-              year: "numeric",
-            })}
-          </span>
-        </div>
-        <NewsRail items={news} />
-      </section>
-
-      {/* Quick actions */}
-      <section className="mb-12">
-        <h2 className="text-[10px] uppercase tracking-[0.2em] font-bold mb-4">
-          Actions rapides
-        </h2>
+        <p className="text-[10px] uppercase tracking-[0.25em] font-bold text-outline mb-4">
+          Explorer
+        </p>
         <div className="grid grid-cols-3 gap-px bg-outline-variant/40">
           <QuickAction href="/search" icon="search" label="Search" sublabel="IA" />
-          <QuickAction
-            href="/scan"
-            icon="qr_code_scanner"
-            label="Scan"
-            sublabel="Caméra"
-          />
-          <QuickAction
-            href="/balade"
-            icon="directions_walk"
-            label="Balade"
-            sublabel="Test"
-          />
+          <QuickAction href="/scan" icon="qr_code_scanner" label="Scan" sublabel="Caméra" />
+          <QuickAction href="/balade" icon="directions_walk" label="Balade" sublabel="Test" />
         </div>
       </section>
 
-      {/* Suggestions */}
+      {/* ── ADN olfactif ────────────────────────────────────────────────── */}
       <section className="mb-12">
         <div className="flex justify-between items-end mb-4">
-          <h2 className="text-[10px] uppercase tracking-[0.2em] font-bold">
+          <p className="text-[10px] uppercase tracking-[0.25em] font-bold">
+            ADN olfactif
+          </p>
+          {profile && (
+            <Link
+              href="/onboarding"
+              className="text-[10px] uppercase tracking-widest font-bold border-b border-primary pb-0.5"
+            >
+              Modifier
+            </Link>
+          )}
+        </div>
+
+        {profile ? (
+          <div className="border border-outline-variant/40 p-5 space-y-5">
+            <div>
+              <p className="text-[9px] uppercase tracking-widest text-outline mb-2.5">
+                Familles
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {profile.preferred_families.map((f) => (
+                  <span
+                    key={f}
+                    className="text-[10px] uppercase tracking-widest border border-outline-variant px-3 py-1.5 font-medium"
+                  >
+                    {FAMILY_VULGAR[f]?.title ?? f}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="h-px bg-outline-variant/40" />
+            <div className="flex gap-10">
+              <div>
+                <p className="text-[9px] uppercase tracking-widest text-outline mb-1">
+                  Intensité
+                </p>
+                <p className="text-[11px] font-bold uppercase tracking-widest">
+                  {profile.intensity_preference === "subtle"
+                    ? "Subtile"
+                    : profile.intensity_preference === "moderate"
+                      ? "Modérée"
+                      : "Projective"}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] uppercase tracking-widest text-outline mb-1">
+                  Moments
+                </p>
+                <p className="text-[11px] font-bold uppercase tracking-widest">
+                  {profile.moments.length} sélectionné{profile.moments.length > 1 ? "s" : ""}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] uppercase tracking-widest text-outline mb-1">
+                  Budget
+                </p>
+                <p className="text-[11px] font-bold uppercase tracking-widest">
+                  {profile.budget === "u100"
+                    ? "< 100€"
+                    : profile.budget === "100_200"
+                      ? "100–200€"
+                      : profile.budget === "o200"
+                        ? "> 200€"
+                        : "Libre"}
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <Link
+            href="/onboarding"
+            className="flex items-center justify-between border border-outline-variant/40 p-5 hover:bg-surface-container-low transition-colors group"
+          >
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-widest">
+                Définis ton profil
+              </p>
+              <p className="text-[10px] uppercase tracking-widest text-outline mt-1.5">
+                5 questions · 1 minute
+              </p>
+            </div>
+            <Icon
+              name="arrow_forward"
+              size={18}
+              className="text-outline group-hover:text-on-background transition-colors"
+            />
+          </Link>
+        )}
+      </section>
+
+      {/* ── Sélection ───────────────────────────────────────────────────── */}
+      <section className="mb-12">
+        <div className="flex justify-between items-end mb-4">
+          <p className="text-[10px] uppercase tracking-[0.25em] font-bold">
             Sélection pour toi
-          </h2>
+          </p>
           <Link
             href="/search"
             className="text-[10px] uppercase tracking-widest font-bold border-b border-primary pb-0.5"
@@ -105,76 +196,32 @@ export default function HomePage() {
             ))}
           </div>
         ) : (
-          <EmptyBlock label="Aucune suggestion pour le moment." />
+          <EmptyBlock label="Lance une balade pour découvrir des parfums." />
         )}
       </section>
 
-      {/* Nearby shops */}
+      {/* ── Actualité ───────────────────────────────────────────────────── */}
       <section>
         <div className="flex justify-between items-end mb-4">
-          <h2 className="text-[10px] uppercase tracking-[0.2em] font-bold">
-            Boutiques
-          </h2>
-          <Link
-            href="/balade"
-            className="text-[10px] uppercase tracking-widest font-bold border-b border-primary pb-0.5"
-          >
-            Balade guidée
-          </Link>
-        </div>
-        {loading ? (
-          <SkeletonList />
-        ) : shops.length === 0 ? (
-          <EmptyBlock label="Aucune boutique enregistrée. Crée-en une depuis le CRM." />
-        ) : (
-          <ul className="border-t border-outline-variant/40">
-            {shops.map((shop) => {
-              const open = shopOpenNow(shop);
-              const ref = `LN-${shop.id.slice(0, 6).toUpperCase()}`;
-              const addressLine = [shop.address_line, shop.postal_code, shop.city]
-                .filter(Boolean)
-                .join(", ");
-              return (
-                <li key={shop.id}>
-                  <Link
-                    href={`/balade/guided/${shop.id}`}
-                    className="flex items-start justify-between py-5 border-b border-outline-variant/40 group"
-                  >
-                    <div className="min-w-0 pr-3">
-                      <p className="text-[9px] font-mono text-outline mb-1">
-                        {ref}
-                      </p>
-                      <h3 className="text-base font-semibold tracking-tight truncate">
-                        {shop.name}
-                      </h3>
-                      {addressLine && (
-                        <p className="text-xs text-on-surface-variant mt-1 line-clamp-2">
-                          {addressLine}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                      <span
-                        className={
-                          open
-                            ? "text-[10px] uppercase tracking-widest font-bold text-primary"
-                            : "text-[10px] uppercase tracking-widest text-outline"
-                        }
-                      >
-                        {open ? "Ouvert" : "Fermé"}
-                      </span>
-                      <Icon name="arrow_forward" size={18} />
-                    </div>
-                  </Link>
-                </li>
-              );
+          <p className="text-[10px] uppercase tracking-[0.25em] font-bold">
+            Actualité
+          </p>
+          <span className="text-[10px] font-mono text-outline">
+            {new Date().toLocaleDateString("fr-FR", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
             })}
-          </ul>
-        )}
+          </span>
+        </div>
+        <NewsRail items={news} />
       </section>
+
     </div>
   );
 }
+
+/* ─── Helpers ───────────────────────────────────────────────────────────── */
 
 function QuickAction({
   href,
@@ -215,20 +262,7 @@ function SkeletonRail() {
       {[0, 1, 2].map((i) => (
         <div
           key={i}
-          className="min-w-[180px] aspect-[3/4] bg-surface-container-low animate-pulse"
-        />
-      ))}
-    </div>
-  );
-}
-
-function SkeletonList() {
-  return (
-    <div className="space-y-2">
-      {[0, 1, 2].map((i) => (
-        <div
-          key={i}
-          className="h-20 bg-surface-container-low animate-pulse"
+          className="min-w-[180px] aspect-[3/4] shimmer-bar flex-shrink-0"
         />
       ))}
     </div>
