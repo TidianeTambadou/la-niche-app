@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
@@ -14,7 +14,7 @@ import {
   type OlfactiveProfile,
 } from "@/lib/profile";
 import { agentRecommend } from "@/lib/agent-client";
-import type { RecommendationCandidate } from "@/lib/agent";
+import type { OlfactiveDNA, RecommendationCandidate } from "@/lib/agent";
 
 type Phase = "configure" | "loading" | "swiping" | "done";
 type Count = 5 | 10 | 20;
@@ -65,6 +65,7 @@ export default function RecommendationsPage() {
   const [phase, setPhase] = useState<Phase>("configure");
   const [count, setCount] = useState<Count>(10);
   const [recs, setRecs] = useState<RecommendationCandidate[]>([]);
+  const [dna, setDna] = useState<OlfactiveDNA | null>(null);
   const [idx, setIdx] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [cardExiting, setCardExiting] = useState<"left" | "right" | null>(null);
@@ -99,6 +100,7 @@ export default function RecommendationsPage() {
     setLiked(0);
     setPassed(0);
     setMatchedCards([]);
+    setDna(null);
     try {
       const result = await agentRecommend(
         count,
@@ -106,14 +108,15 @@ export default function RecommendationsPage() {
         likedFragrances,
         dislikedFragrances,
       );
-      if (result.length === 0) {
+      if (result.recommendations.length === 0) {
         setError(
           "Aucune recommandation générée. Essaie de compléter ton profil ou d'ajouter quelques parfums en wishlist.",
         );
         setPhase("configure");
         return;
       }
-      setRecs(result);
+      setRecs(result.recommendations);
+      setDna(result.dna);
       setPhase("swiping");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur inconnue");
@@ -191,7 +194,7 @@ export default function RecommendationsPage() {
   }
 
   if (phase === "loading") {
-    return <LoadingView count={count} />;
+    return <LoadingView />;
   }
 
   if (phase === "done") {
@@ -200,9 +203,11 @@ export default function RecommendationsPage() {
         liked={liked}
         passed={passed}
         matchedCards={matchedCards}
+        dna={dna}
         onRestart={() => {
           setPhase("configure");
           setRecs([]);
+          setDna(null);
           setError(null);
         }}
       />
@@ -242,6 +247,32 @@ export default function RecommendationsPage() {
           {liked} ♥
         </span>
       </div>
+
+      {/* Analyzed DNA strip */}
+      {dna && dna.key_notes.length > 0 && (
+        <div className="border border-outline-variant bg-surface-container-low px-3 py-2">
+          <p className="text-[9px] uppercase tracking-[0.25em] text-outline font-mono mb-1">
+            Ton ADN analysé
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {dna.dominant_accords.slice(0, 2).map((a) => (
+              <span
+                key={a}
+                className="text-[10px] uppercase tracking-widest font-bold text-on-background"
+              >
+                {a}
+              </span>
+            ))}
+            <span className="text-[10px] text-outline">·</span>
+            {dna.key_notes.slice(0, 5).map((n, i, arr) => (
+              <span key={n} className="text-[10px] text-outline">
+                {n}
+                {i < arr.length - 1 ? "," : ""}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Card stack */}
       <div
@@ -496,34 +527,149 @@ function ConfigureView({
  * Loading view
  * ====================================================================== */
 
-function LoadingView({ count }: { count: number }) {
+/* Multi-agent pipeline progress.
+ *
+ * The underlying API call is a single POST, but we simulate staged progress
+ * on the frontend so the user sees that three specialised agents are at
+ * work. Timings are calibrated to the average end-to-end latency (~15s). */
+function LoadingView() {
+  const [stage, setStage] = useState(0);
+
+  useEffect(() => {
+    const t1 = window.setTimeout(() => setStage(1), 4500);
+    const t2 = window.setTimeout(() => setStage(2), 9500);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, []);
+
+  const stages = [
+    {
+      icon: "biotech",
+      title: "Agent Analyste",
+      label: "Extraction de ton ADN olfactif",
+      detail: "Croisement profil + wishlist + données Fragrantica",
+    },
+    {
+      icon: "travel_explore",
+      title: "Agent Chercheur",
+      label: "Exploration ciblée Fragrantica",
+      detail: "Requêtes parallèles sur tes accords clés",
+    },
+    {
+      icon: "auto_awesome",
+      title: "Agent Curator",
+      label: "Ranking strict contre ton ADN",
+      detail: "Chaque parfum doit citer tes notes phares",
+    },
+  ];
+
   return (
-    <div className="px-6 pt-4 pb-12 flex flex-col items-center text-center">
-      <div className="mt-8 mb-6 w-full max-w-md">
-        <div
-          className="relative overflow-hidden bg-surface-container-low border border-outline-variant"
-          style={{ aspectRatio: "3 / 4.6" }}
-        >
-          <div className="shimmer-bar absolute inset-0" />
-        </div>
-      </div>
-      <p className="text-[10px] uppercase tracking-[0.3em] text-outline mb-2">
-        Analyse en cours
+    <div className="px-6 pt-10 pb-12">
+      <header className="mb-10">
+        <p className="text-[10px] uppercase tracking-[0.3em] text-outline mb-2">
+          Pipeline multi-agents
+        </p>
+        <h1 className="text-4xl font-medium leading-[0.95] tracking-tighter">
+          Trois agents
+          <br />
+          travaillent pour toi.
+        </h1>
+      </header>
+
+      <ul className="flex flex-col gap-0 border border-outline-variant">
+        {stages.map((s, i) => {
+          const done = i < stage;
+          const active = i === stage;
+          return (
+            <li
+              key={s.title}
+              className={clsx(
+                "flex items-start gap-4 p-5 border-b border-outline-variant last:border-0 transition-all",
+                done && "bg-primary text-on-primary",
+                active && "bg-surface-container-low",
+              )}
+            >
+              <div
+                className={clsx(
+                  "w-10 h-10 flex-shrink-0 flex items-center justify-center border",
+                  done
+                    ? "border-on-primary"
+                    : active
+                      ? "border-primary"
+                      : "border-outline-variant/50",
+                )}
+              >
+                {done ? (
+                  <Icon name="check" size={18} />
+                ) : active ? (
+                  <span className="relative">
+                    <Icon name={s.icon} size={18} />
+                  </span>
+                ) : (
+                  <Icon
+                    name={s.icon}
+                    size={18}
+                    className="text-outline opacity-40"
+                  />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p
+                  className={clsx(
+                    "text-[9px] uppercase tracking-[0.25em] font-mono",
+                    done
+                      ? "text-on-primary/70"
+                      : active
+                        ? "text-primary"
+                        : "text-outline",
+                  )}
+                >
+                  {s.title} · {done ? "terminé" : active ? "en cours…" : "en attente"}
+                </p>
+                <p
+                  className={clsx(
+                    "text-sm font-semibold tracking-tight mt-0.5",
+                    !done && !active && "text-outline",
+                  )}
+                >
+                  {s.label}
+                </p>
+                <p
+                  className={clsx(
+                    "text-[11px] mt-1 leading-relaxed",
+                    done
+                      ? "text-on-primary/80"
+                      : active
+                        ? "text-on-surface-variant"
+                        : "text-outline/70",
+                  )}
+                >
+                  {s.detail}
+                </p>
+                {active && (
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" />
+                    <span
+                      className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce"
+                      style={{ animationDelay: "0.15s" }}
+                    />
+                    <span
+                      className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce"
+                      style={{ animationDelay: "0.3s" }}
+                    />
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="text-[10px] uppercase tracking-[0.2em] text-outline text-center mt-8">
+        Sources · Fragrantica · Basenotes · Parfumo
       </p>
-      <p className="text-sm text-on-surface-variant max-w-xs">
-        L&apos;IA croise ton profil avec {count} suggestions Fragrantica…
-      </p>
-      <div className="mt-6 flex items-center gap-2">
-        <span className="w-2 h-2 bg-primary rounded-full animate-bounce" />
-        <span
-          className="w-2 h-2 bg-primary rounded-full animate-bounce"
-          style={{ animationDelay: "0.15s" }}
-        />
-        <span
-          className="w-2 h-2 bg-primary rounded-full animate-bounce"
-          style={{ animationDelay: "0.3s" }}
-        />
-      </div>
     </div>
   );
 }
@@ -536,11 +682,13 @@ function DoneView({
   liked,
   passed,
   matchedCards,
+  dna,
   onRestart,
 }: {
   liked: number;
   passed: number;
   matchedCards: RecommendationCandidate[];
+  dna: OlfactiveDNA | null;
   onRestart: () => void;
 }) {
   return (
@@ -555,6 +703,49 @@ function DoneView({
           s&apos;affine.
         </h1>
       </header>
+
+      {dna && (dna.dominant_accords.length > 0 || dna.key_notes.length > 0) && (
+        <section className="mb-10 border border-outline-variant p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Icon name="biotech" size={14} className="text-primary" />
+            <h2 className="text-[10px] uppercase font-bold tracking-widest">
+              ADN olfactif analysé
+            </h2>
+          </div>
+          {dna.dominant_accords.length > 0 && (
+            <div className="mb-3">
+              <p className="text-[9px] uppercase tracking-widest text-outline mb-1">
+                Accords dominants
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {dna.dominant_accords.map((a) => (
+                  <span
+                    key={a}
+                    className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 bg-primary text-on-primary"
+                  >
+                    {a}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {dna.key_notes.length > 0 && (
+            <div className="mb-3">
+              <p className="text-[9px] uppercase tracking-widest text-outline mb-1">
+                Notes clés
+              </p>
+              <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                {dna.key_notes.join(" · ")}
+              </p>
+            </div>
+          )}
+          {dna.personality && (
+            <p className="text-[11px] italic text-on-surface-variant leading-relaxed mt-3">
+              &ldquo; {dna.personality} &rdquo;
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="mb-10 grid grid-cols-2 gap-px bg-outline-variant/40 border border-outline-variant">
         <div className="bg-background py-6 flex flex-col items-center">

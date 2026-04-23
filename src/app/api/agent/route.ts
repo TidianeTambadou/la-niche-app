@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import {
   AGENT_SYSTEM_PROMPT,
+  ANALYZER_SYSTEM_PROMPT,
+  CURATOR_SYSTEM_PROMPT,
   IDENTIFY_SYSTEM_PROMPT,
-  RECOMMEND_SYSTEM_PROMPT,
   SEARCH_SYSTEM_PROMPT,
   extractJson,
   type AgentRequest,
   type AgentResponse,
   type IdentifyResult,
+  type OlfactiveDNA,
   type RecommendationCandidate,
   type SearchCandidate,
 } from "@/lib/agent";
@@ -283,55 +285,138 @@ export async function POST(req: Request) {
     }
   }
 
-  /* ── RECOMMEND (Tinder-style personalized picks) ── */
+  /* ── RECOMMEND (multi-agent pipeline) ──────────────────────────────────
+   * Stage 1 — Researcher  : Tavily lookup on the user's liked fragrances to
+   *                         pull real note/pyramid data from Fragrantica.
+   * Stage 2 — Analyst     : LLM extracts the user's olfactive DNA (dominant
+   *                         accords, key notes, avoid notes, search queries).
+   * Stage 3 — Researcher  : parallel Tavily searches from the Analyst's
+   *                         queries to gather candidate parfums.
+   * Stage 4 — Curator     : LLM scores & ranks candidates strictly against
+   *                         the DNA. Each `reason` must cite notes from the
+   *                         DNA — generic matches are rejected by the prompt.
+   * ------------------------------------------------------------------- */
   if (body.mode === "recommend") {
-    const { count, profileContext, likedFragrances, dislikedFragrances } = body.payload ?? {
-      count: 10,
-      profileContext: "",
-      likedFragrances: [],
-      dislikedFragrances: [],
-    };
+    const { count, profileContext, likedFragrances, dislikedFragrances } =
+      body.payload ?? {
+        count: 10,
+        profileContext: "",
+        likedFragrances: [],
+        dislikedFragrances: [],
+      };
     const safeCount = Math.min(20, Math.max(3, Math.round(count)));
 
     try {
-      // Ground the recs in Fragrantica via Tavily: prioritise parfums
-      // similaires to the user's liked list; fall back to generic niche picks.
-      const seed = likedFragrances
-        .slice(0, 4)
-        .map((f) => `${f.brand} ${f.name}`)
-        .join(", ");
-      const query = seed
-        ? `parfums similaires à ${seed} recommandations niche fragrantica`
-        : `meilleures recommandations parfums niche fragrantica`;
-      const webResults = await tavilySearch(query);
+      /* Stage 1 — real Fragrantica data for the user's liked parfums */
+      const topLiked = likedFragrances.slice(0, 3);
+      const likedNotesWeb = topLiked.length
+        ? await tavilySearch(
+            `${topLiked.map((f) => `"${f.brand} ${f.name}"`).join(" ")} notes pyramide fragrantica`,
+          )
+        : "(Aucun parfum aimé pour l'instant — recommandations basées sur le profil déclaratif uniquement.)";
 
       const likedList = likedFragrances.length
         ? likedFragrances.map((f) => `  • ${f.brand} — ${f.name}`).join("\n")
-        : "  (aucun pour l'instant)";
+        : "  (aucun)";
       const dislikedList = dislikedFragrances.length
         ? dislikedFragrances.map((f) => `  • ${f.brand} — ${f.name}`).join("\n")
         : "  (aucun)";
 
-      const wishlistAvoid = [...likedFragrances, ...dislikedFragrances]
+      /* Stage 2 — Analyst extracts olfactive DNA + targeted search queries */
+      const analyzerRaw = await openRouterCall(
+        apiKey,
+        [
+          { role: "system", content: ANALYZER_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `${profileContext || "(Aucun profil déclaratif rempli.)"}\n\nParfums AIMÉS :\n${likedList}\n\nParfums REJETÉS :\n${dislikedList}\n\nDonnées Fragrantica sur les parfums aimés :\n${likedNotesWeb}\n\nExtrait l'ADN olfactif de cet utilisateur et génère 3-5 requêtes Fragrantica ciblées. JSON uniquement.`,
+          },
+        ],
+        1200,
+      );
+
+      const analyzerParsed = extractJson(analyzerRaw) as {
+        dna?: Partial<OlfactiveDNA>;
+        search_queries?: string[];
+      };
+
+      const dna: OlfactiveDNA = {
+        dominant_accords: analyzerParsed.dna?.dominant_accords ?? [],
+        key_notes: analyzerParsed.dna?.key_notes ?? [],
+        avoid_notes: analyzerParsed.dna?.avoid_notes ?? [],
+        personality: analyzerParsed.dna?.personality ?? "",
+        intensity_signature: analyzerParsed.dna?.intensity_signature ?? "",
+        wear_context: analyzerParsed.dna?.wear_context ?? "",
+      };
+
+      // Fallback queries if the analyst didn't produce any
+      const searchQueries = (analyzerParsed.search_queries ?? []).slice(0, 5);
+      if (searchQueries.length === 0) {
+        if (dna.key_notes.length > 0) {
+          searchQueries.push(
+            `parfums ${dna.key_notes.slice(0, 3).join(" ")} niche fragrantica`,
+          );
+        }
+        if (dna.dominant_accords.length > 0) {
+          searchQueries.push(
+            `parfums ${dna.dominant_accords[0]} recommandations fragrantica`,
+          );
+        }
+        if (searchQueries.length === 0) {
+          searchQueries.push("meilleurs parfums niche fragrantica 2024");
+        }
+      }
+
+      /* Stage 3 — Researcher does parallel targeted searches */
+      const candidateResults = await Promise.all(
+        searchQueries.slice(0, 4).map((q) => tavilySearch(q).catch(() => "")),
+      );
+      const combinedCandidates = candidateResults
+        .map((r, i) => `=== Recherche ${i + 1}: "${searchQueries[i]}" ===\n${r}`)
+        .join("\n\n");
+
+      /* Stage 4 — Curator ranks candidates strictly against the DNA */
+      const exclusionList = [...likedFragrances, ...dislikedFragrances]
         .map((f) => `${f.brand} ${f.name}`)
         .join(" | ");
 
-      const text = await openRouterCall(
+      // Scale the token budget with count: curator output is ~200 tok/rec
+      const curatorMaxTokens = Math.max(1500, safeCount * 220);
+
+      const curatorRaw = await openRouterCall(
         apiKey,
         [
-          { role: "system", content: RECOMMEND_SYSTEM_PROMPT },
+          { role: "system", content: CURATOR_SYSTEM_PROMPT },
           {
             role: "user",
-            content: `${profileContext || "Aucun profil olfactif rempli — recommande des pièces polyvalentes et populaires."}\n\nParfums AIMÉS (wishlist) :\n${likedList}\n\nParfums REJETÉS :\n${dislikedList}\n\nÀ NE PAS SUGGÉRER (déjà connus) : ${wishlistAvoid || "—"}\n\nSources Fragrantica :\n${webResults}\n\nGénère EXACTEMENT ${safeCount} recommandations DIFFÉRENTES, variées en maisons. Chaque \`reason\` doit lier explicitement le parfum au profil de l'utilisateur. JSON STRICT :\n{"recommendations":[{"name":"...","brand":"...","family":"Woody Amber","notes_brief":"≤80 char","reason":"≤140 char pourquoi ce parfum pour ce profil","match_score":87,"image_url":"https://fimgs.net/...jpg (optionnel)","source_url":"https://www.fragrantica.com/perfume/...html"}]}`,
+            content: `ADN OLFACTIF DE L'UTILISATEUR :
+- Accords dominants : ${dna.dominant_accords.join(", ") || "—"}
+- Notes clés : ${dna.key_notes.join(", ") || "—"}
+- Notes à éviter : ${dna.avoid_notes.join(", ") || "—"}
+- Personnalité : ${dna.personality || "—"}
+- Sillage : ${dna.intensity_signature || "—"}
+- Contexte : ${dna.wear_context || "—"}
+
+PARFUMS AIMÉS (à citer dans les reasons quand pertinent) :
+${likedList}
+
+À EXCLURE (déjà connus) : ${exclusionList || "—"}
+
+RÉSULTATS FRAGRANTICA (candidats) :
+${combinedCandidates}
+
+Sélectionne EXACTEMENT ${safeCount} parfums DIFFÉRENTS des parfums aimés/rejetés, qui respectent les contraintes absolues du system prompt. Chaque \`reason\` DOIT citer 1-2 notes spécifiques qui correspondent à key_notes.`,
           },
         ],
-        2500,
+        curatorMaxTokens,
       );
 
-      const parsed = extractJson(text) as {
+      const curatorParsed = extractJson(curatorRaw) as {
         recommendations?: Partial<RecommendationCandidate>[];
       };
-      const recommendations: RecommendationCandidate[] = (parsed.recommendations ?? [])
+      const recommendations: RecommendationCandidate[] = (
+        curatorParsed.recommendations ?? []
+      )
         .filter((r) => r.name && r.brand)
         .slice(0, safeCount)
         .map((r) => ({
@@ -339,13 +424,14 @@ export async function POST(req: Request) {
           brand: r.brand!,
           family: r.family ?? "—",
           notes_brief: r.notes_brief ?? "",
-          reason: r.reason ?? "Correspond à ton profil olfactif.",
+          reason: r.reason ?? "",
           match_score: Math.min(
             99,
             Math.max(50, Math.round(r.match_score ?? 75)),
           ),
           image_url:
-            r.image_url && /^https?:\/\/.+\.(jpe?g|png|webp)(\?.*)?$/i.test(r.image_url)
+            r.image_url &&
+            /^https?:\/\/.+\.(jpe?g|png|webp)(\?.*)?$/i.test(r.image_url)
               ? r.image_url
               : undefined,
           source_url:
@@ -353,10 +439,19 @@ export async function POST(req: Request) {
             `https://www.fragrantica.com/search/?query=${encodeURIComponent(`${r.brand} ${r.name}`)}`,
         }));
 
-      return NextResponse.json({ ok: true, mode: "recommend", recommendations } satisfies AgentResponse);
+      return NextResponse.json({
+        ok: true,
+        mode: "recommend",
+        recommendations,
+        dna,
+      } satisfies AgentResponse);
     } catch (e) {
       return NextResponse.json(
-        { ok: false, error: "upstream_error", detail: e instanceof Error ? e.message : String(e) } satisfies AgentResponse,
+        {
+          ok: false,
+          error: "upstream_error",
+          detail: e instanceof Error ? e.message : String(e),
+        } satisfies AgentResponse,
         { status: 502 },
       );
     }

@@ -6,6 +6,7 @@
 import type {
   AgentResponse,
   IdentifyResult,
+  OlfactiveDNA,
   RecommendationCandidate,
   SearchCandidate,
 } from "@/lib/agent";
@@ -125,13 +126,18 @@ export async function agentIdentify(
   return null;
 }
 
+export type RecommendResult = {
+  recommendations: RecommendationCandidate[];
+  dna: OlfactiveDNA;
+};
+
 export async function agentRecommend(
   count: number,
   profileContext: string,
   likedFragrances: Array<{ name: string; brand: string }>,
   dislikedFragrances: Array<{ name: string; brand: string }>,
   signal?: AbortSignal,
-): Promise<RecommendationCandidate[]> {
+): Promise<RecommendResult> {
   const res = await call(
     {
       mode: "recommend",
@@ -139,7 +145,9 @@ export async function agentRecommend(
     },
     signal,
   );
-  if (res.ok && res.mode === "recommend") return res.recommendations;
+  if (res.ok && res.mode === "recommend") {
+    return { recommendations: res.recommendations, dna: res.dna };
+  }
   if (!res.ok) {
     const msg =
       res.error === "agent_disabled"
@@ -151,7 +159,17 @@ export async function agentRecommend(
             : `${res.error}${res.detail ? ` — ${res.detail}` : ""}`;
     throw new Error(msg);
   }
-  return [];
+  return {
+    recommendations: [],
+    dna: {
+      dominant_accords: [],
+      key_notes: [],
+      avoid_notes: [],
+      personality: "",
+      intensity_signature: "",
+      wear_context: "",
+    },
+  };
 }
 
 export type AskHistoryTurn = { role: "user" | "assistant"; content: string };
