@@ -69,6 +69,12 @@ function translateAuthError(raw: string): string {
   ) {
     return "Connexion au serveur impossible. Vérifie ta connexion internet et réessaie.";
   }
+  if (
+    m.includes("database error saving new user") ||
+    m.includes("unexpected_failure")
+  ) {
+    return "Création de compte impossible côté serveur. Un trigger Supabase bloque l'inscription — contacte l'admin pour vérifier la base.";
+  }
   return raw;
 }
 
@@ -197,6 +203,10 @@ function LoginContent() {
             email: trimmed,
             password,
             options: {
+              // `app: "mobile"` tells the shared Supabase project's
+              // handle_new_user() trigger to skip creating a `shops` row
+              // for this user. See migrations/2026-04-24-fix-signup-trigger.sql.
+              data: { app: "mobile" },
               emailRedirectTo:
                 typeof window !== "undefined"
                   ? `${window.location.origin}${onboardingRedirect}`
@@ -219,6 +229,9 @@ function LoginContent() {
           supabase.auth.signInWithOtp({
             email: trimmed,
             options: {
+              // Same marker as signup — OTP creates a user on first use,
+              // so the trigger needs to know this is a mobile customer too.
+              data: { app: "mobile" },
               emailRedirectTo:
                 typeof window !== "undefined"
                   ? `${window.location.origin}${redirect}`
