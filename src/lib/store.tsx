@@ -6,9 +6,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { BodyZone, Fragrance } from "@/lib/fragrances";
+import { useAuth } from "@/lib/auth";
 
 export type WishlistStatus = "liked" | "disliked";
 export type WishlistOrigin = "search" | "scan" | "balade" | "manual";
@@ -132,12 +134,24 @@ type StoreContextValue = StoreState & StoreActions;
 
 const StoreContext = createContext<StoreContextValue | null>(null);
 
-const STORAGE_KEY = "la-niche.store.v1";
+/**
+ * Per-user storage keys. Previously the store used a single global
+ * `la-niche.store.v1` key, which caused user A's wishlist / balade history
+ * to leak into user B's fresh account after signout → signup on the same
+ * device. We now namespace by auth user id. Anonymous browsing gets its
+ * own `anon` slot so logging in doesn't silently destroy that session.
+ */
+const STORAGE_PREFIX = "la-niche.store.v2";
+const LEGACY_STORAGE_KEY = "la-niche.store.v1";
 
-function readStorage(): StoreState | null {
+function storageKeyFor(userId: string | null): string {
+  return userId ? `${STORAGE_PREFIX}.${userId}` : `${STORAGE_PREFIX}.anon`;
+}
+
+function readStorage(userId: string | null): StoreState | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKeyFor(userId));
     if (!raw) return null;
     return JSON.parse(raw) as StoreState;
   } catch {
@@ -145,10 +159,10 @@ function readStorage(): StoreState | null {
   }
 }
 
-function writeStorage(state: StoreState) {
+function writeStorage(userId: string | null, state: StoreState) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(storageKeyFor(userId), JSON.stringify(state));
   } catch {
     // ignore quota errors
   }
@@ -161,21 +175,43 @@ const initialState: StoreState = {
 };
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
+  const { user, loading: authLoading } = useAuth();
+  const userId = user?.id ?? null;
+
   const [state, setState] = useState<StoreState>(initialState);
-  const [hydrated, setHydrated] = useState(false);
+  // Tracks which userId the current `state` was hydrated from, so the
+  // persist effect never writes user A's state into user B's storage slot
+  // during the transitional render between auth change and re-hydrate.
+  const hydratedForRef = useRef<string | null | undefined>(undefined);
 
-  // Hydrate from localStorage on first client render only.
+  // Re-hydrate whenever the signed-in user changes (sign in, sign out,
+  // account switch). Resets to `initialState` when the new user has no
+  // stored data yet — that's the "fresh account = empty data" behaviour.
   useEffect(() => {
-    const fromStorage = readStorage();
-    if (fromStorage) setState(fromStorage);
-    setHydrated(true);
-  }, []);
+    if (authLoading) return;
 
-  // Persist on every state change after hydration.
+    // One-time cleanup: remove the legacy global key so its data (which
+    // can no longer be attributed to any specific user) doesn't linger.
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const fromStorage = readStorage(userId);
+    setState(fromStorage ?? initialState);
+    hydratedForRef.current = userId;
+  }, [userId, authLoading]);
+
+  // Persist on every state change — but only after we've hydrated for
+  // this specific userId, to avoid writing stale state to the wrong slot.
   useEffect(() => {
-    if (!hydrated) return;
-    writeStorage(state);
-  }, [state, hydrated]);
+    if (authLoading) return;
+    if (hydratedForRef.current !== userId) return;
+    writeStorage(userId, state);
+  }, [state, userId, authLoading]);
 
   const addToWishlist = useCallback<StoreActions["addToWishlist"]>(
     (fragranceId, status, origin, fragranceMeta) => {
