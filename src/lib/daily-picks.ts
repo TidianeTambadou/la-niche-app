@@ -26,7 +26,7 @@ type CachedPicks = {
   revealed: boolean;
 };
 
-const STORAGE_PREFIX = "la-niche.daily-picks.v3";
+const STORAGE_PREFIX = "la-niche.daily-picks.v4";
 
 function todayKey(): string {
   const d = new Date();

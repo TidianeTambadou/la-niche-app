@@ -204,7 +204,7 @@ function SearchResult({ candidate }: { candidate: SearchCandidate }) {
     addToWishlist(wishlistKey, "liked", "search", {
       name: candidate.name,
       brand: candidate.brand,
-      imageUrl: null,
+      imageUrl: candidate.image_url ?? null,
     });
   }
 
@@ -214,6 +214,7 @@ function SearchResult({ candidate }: { candidate: SearchCandidate }) {
         <PerfumeArtwork
           brand={candidate.brand}
           name={candidate.name}
+          imageUrl={candidate.image_url}
           variant="thumb"
           className="w-16 h-20 flex-shrink-0"
         />

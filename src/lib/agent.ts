@@ -176,6 +176,9 @@ export type IdentifyResult = {
   confidence: number;
   notes_brief: string;
   source_url: string;
+  /** Real bottle image scraped from Fragrantica HTML by the agent. Only set
+   *  when the URL passes the host allowlist (fimgs.net / fragrantica). */
+  image_url?: string;
 };
 
 export type OlfactiveDNA = {

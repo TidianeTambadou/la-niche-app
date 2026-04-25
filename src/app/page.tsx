@@ -327,16 +327,24 @@ function DailyEnvelope({
       )}
       aria-label={`Découvrir tes ${picks.length} parfums du jour`}
     >
+      {/* Drifting dotted backdrop for movement */}
+      <div className="daily-drift absolute inset-0 opacity-70 pointer-events-none" aria-hidden />
+
       {/* Subtle radial gradient backdrop */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_30%,rgba(255,255,255,0.08),transparent_60%)] pointer-events-none" />
+
+      {/* Continuous sheen sweep — adds liveliness to the sealed card */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="envelope-sheen absolute top-0 -left-1/3 h-full w-1/2 bg-gradient-to-r from-transparent via-on-background/15 to-transparent" />
+      </div>
 
       <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center gap-5">
         <span className="text-[10px] uppercase tracking-[0.35em] text-outline">
           La Niche · {todayLabel()}
         </span>
 
-        {/* Logo */}
-        <div className="w-20 h-20 rounded-full overflow-hidden bg-background border border-outline-variant flex items-center justify-center">
+        {/* Logo with subtle pulsing wax-seal feel */}
+        <div className="seal-pulse w-20 h-20 rounded-full overflow-hidden bg-background border border-outline-variant flex items-center justify-center shadow-md">
           {logoFailed ? (
             <span className="font-mono font-bold text-base">LN</span>
           ) : (
@@ -395,7 +403,16 @@ function todayLabel(): string {
 }
 
 /* Carousel of 3 flippable flashcards — front shows bottle/brand/name, back
- * shows family + notes brief + source link + wishlist add. */
+ * shows family + notes brief + source link + wishlist add.
+ *
+ * Motion design:
+ *   - Drift gradient backdrop (very subtle dotted pattern that pans 9s loop)
+ *   - Reveal-pop staggered entry (70 ms cubic spring)
+ *   - Active card breathes (translateY ±4 px) and glows softly
+ *   - Inactive cards dim to opacity 0.55 + scale 0.92 for visual hierarchy
+ *   - Auto-advance every 6 s, paused 12 s after a manual interaction
+ *   - Pagination dots morph (active dot grows + extends, inactive shrinks)
+ */
 function DailyFlashcardCarousel({ picks }: { picks: SearchCandidate[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
@@ -447,39 +464,57 @@ function DailyFlashcardCarousel({ picks }: { picks: SearchCandidate[] }) {
   }
 
   return (
-    <div className="reveal-fade-in">
+    <div className="reveal-fade-in relative">
+      {/* Drifting dotted backdrop adds gentle motion behind the cards. */}
+      <div
+        className="daily-drift absolute inset-0 -z-0 pointer-events-none opacity-90"
+        aria-hidden
+      />
+
       <div
         ref={scrollRef}
         onScroll={onScroll}
         onPointerDown={noteUserInteraction}
         onWheel={noteUserInteraction}
-        className="flex gap-4 overflow-x-auto hide-scrollbar -mx-6 px-6 pb-2 snap-x snap-mandatory scroll-smooth"
+        className="relative flex gap-4 overflow-x-auto hide-scrollbar -mx-6 px-6 py-3 snap-x snap-mandatory scroll-smooth"
         style={{ scrollPaddingLeft: "1.5rem" }}
       >
-        {picks.map((p, i) => (
-          <div
-            key={`${p.brand}-${p.name}-${i}`}
-            className="snap-start flex-shrink-0 min-w-[78%] sm:min-w-[280px] aspect-[3/4]"
-          >
-            <DailyFlashcard pick={p} index={i} />
-          </div>
-        ))}
+        {picks.map((p, i) => {
+          const isActive = i === active;
+          return (
+            <div
+              key={`${p.brand}-${p.name}-${i}`}
+              className={clsx(
+                "snap-start flex-shrink-0 min-w-[78%] sm:min-w-[280px] aspect-[3/4]",
+                "transition-all duration-500 ease-out will-change-transform",
+                isActive
+                  ? "opacity-100 scale-100 daily-float"
+                  : "opacity-55 scale-[0.92]",
+              )}
+            >
+              <DailyFlashcard pick={p} index={i} active={isActive} />
+            </div>
+          );
+        })}
       </div>
+
       {picks.length > 1 && (
-        <div className="flex justify-center gap-1.5 mt-3">
+        <div className="flex justify-center items-center gap-2 mt-4">
           {picks.map((_, i) => (
             <span
               key={i}
-              className={`h-[3px] transition-all ${
+              className={clsx(
+                "h-[3px] rounded-full transition-all duration-500 ease-out",
                 i === active
-                  ? "w-6 bg-primary"
-                  : "w-3 bg-outline-variant/60"
-              }`}
+                  ? "w-7 bg-primary dot-grow"
+                  : "w-2 bg-outline-variant/60",
+              )}
             />
           ))}
         </div>
       )}
-      <p className="text-[10px] uppercase tracking-widest text-outline text-center mt-3">
+      <p className="text-[10px] uppercase tracking-widest text-outline text-center mt-3 flex items-center justify-center gap-1.5">
+        <Icon name="touch_app" size={11} className="text-outline" />
         Touche une carte pour la retourner
       </p>
     </div>
@@ -489,9 +524,11 @@ function DailyFlashcardCarousel({ picks }: { picks: SearchCandidate[] }) {
 function DailyFlashcard({
   pick,
   index,
+  active,
 }: {
   pick: SearchCandidate;
   index: number;
+  active: boolean;
 }) {
   const [flipped, setFlipped] = useState(false);
   const { addToWishlist, isWishlisted } = useStore();
@@ -506,14 +543,17 @@ function DailyFlashcard({
     addToWishlist(wishlistKey, "liked", "manual", {
       name: pick.name,
       brand: pick.brand,
-      imageUrl: pick.image_url ?? null,
+      imageUrl: null,
     });
   }
 
   return (
     <div
-      className="flashcard-surface w-full h-full reveal-pop"
-      style={{ animationDelay: `${index * 110}ms` }}
+      className={clsx(
+        "flashcard-surface w-full h-full reveal-pop",
+        active && "daily-glow",
+      )}
+      style={{ animationDelay: `${index * 130}ms` }}
     >
       <div
         className={clsx(
@@ -541,6 +581,7 @@ function DailyFlashcardFront({ pick }: { pick: SearchCandidate }) {
         name={pick.name}
         family={pick.family}
         notesBrief={pick.notes_brief}
+        imageUrl={pick.image_url}
         variant="card"
         className="w-full h-full"
       />

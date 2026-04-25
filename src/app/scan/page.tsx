@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
+import { PerfumeArtwork } from "@/components/PerfumeArtwork";
 import { useFragrances, type Fragrance } from "@/lib/data";
 import { useStore } from "@/lib/store";
 import { agentIdentify } from "@/lib/agent-client";
@@ -384,7 +385,9 @@ function ScanResult({
   const displayBrand =
     identified.kind === "matched" ? identified.fragrance.brand : agent.brand;
   const displayImage =
-    identified.kind === "matched" ? identified.fragrance.imageUrl : null;
+    identified.kind === "matched"
+      ? (identified.fragrance.imageUrl ?? agent.image_url ?? null)
+      : (agent.image_url ?? null);
   const displayReference =
     identified.kind === "matched"
       ? identified.fragrance.reference
@@ -393,18 +396,14 @@ function ScanResult({
   return (
     <section className="flex flex-col gap-6">
       <div className="relative aspect-[4/5] bg-surface-container-low overflow-hidden">
-        {displayImage ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img
-            src={displayImage}
-            alt={displayName}
-            className="w-full h-full object-cover grayscale contrast-110"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-outline">
-            <Icon name="image_not_supported" size={48} />
-          </div>
-        )}
+        <PerfumeArtwork
+          brand={displayBrand}
+          name={displayName}
+          imageUrl={displayImage ?? undefined}
+          variant="card"
+          showSoonCaption={false}
+          className="absolute inset-0 w-full h-full border-0"
+        />
         <div className="absolute top-3 left-3">
           <span className="text-[10px] uppercase tracking-widest font-mono bg-background/90 px-2 py-1 border border-outline-variant">
             REF: {displayReference}

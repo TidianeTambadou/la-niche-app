@@ -996,6 +996,7 @@ function DoneView({
                 <PerfumeArtwork
                   brand={c.brand}
                   name={c.name}
+                  imageUrl={c.image_url}
                   variant="thumb"
                   className="w-12 h-16 flex-shrink-0"
                 />
@@ -1124,12 +1125,13 @@ function SwipeCardFront({
 }) {
   return (
     <div className="relative w-full h-full overflow-hidden bg-background border border-outline-variant">
-      {/* La Niche logo watermark — image scraping was unreliable so we now
-          render a branded placeholder with the perfume name on top. */}
+      {/* Real bottle photo when the curator scraped one (fimgs.net), else
+          falls back to the La Niche logo watermark. */}
       <PerfumeArtwork
         brand={card.brand}
         name={card.name}
         family={card.family}
+        imageUrl={card.image_url}
         variant="card"
         showSoonCaption={false}
         className="absolute inset-0 w-full h-full border-0 bg-on-background"

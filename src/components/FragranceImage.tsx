@@ -4,16 +4,17 @@ import { useEffect, useState } from "react";
 import { clsx } from "clsx";
 
 /**
- * Robust fragrance image with a typographic monogram fallback.
+ * Robust fragrance image with the La Niche logo-watermark fallback.
  *
- * Problem: Fragrantica hotlinks break, shops return 404s, recommendations
- * from the AI sometimes have no image URL at all. Every place that
- * displays a parfum used to silently render an empty box.
+ * Problem: scraped Fragrantica hotlinks break, shops return 404s, AI
+ * recommendations sometimes have no image at all. Every place that displays
+ * a parfum used to silently render an empty box.
  *
  * Behaviour:
  *   - Renders <img> when src is present and hasn't failed to load.
- *   - On error → switches to a monogram block (brand initials) on a dark
- *     surface, styled consistently with the Clinical Atelier design system.
+ *   - On error (or no src) → renders the La Niche logo watermark + brand &
+ *     perfume name. Same visual language as the home daily-picks card so
+ *     the placeholder feels intentional, not broken.
  *   - When src prop changes, failure state resets so retrying a different
  *     URL works.
  */
@@ -26,13 +27,14 @@ export function FragranceImage({
 }: {
   src: string | null | undefined;
   name: string;
-  /** Optional — used to build the monogram (e.g. "CH" for Chanel). */
+  /** Brand label printed on the watermark fallback. */
   brand?: string;
   className?: string;
-  /** Controls monogram typography size when the fallback kicks in. */
+  /** Drives the typography scale on the watermark fallback. */
   fallbackSize?: "sm" | "md" | "lg" | "xl";
 }) {
   const [failed, setFailed] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
 
   useEffect(() => {
     setFailed(false);
@@ -53,51 +55,62 @@ export function FragranceImage({
     );
   }
 
-  const sizeClass =
-    fallbackSize === "xl"
-      ? "text-5xl"
-      : fallbackSize === "lg"
-        ? "text-3xl"
-        : fallbackSize === "sm"
-          ? "text-[10px]"
-          : "text-base";
+  const isLarge = fallbackSize === "lg" || fallbackSize === "xl";
+  const isXSmall = fallbackSize === "sm";
 
   return (
     <div
       className={clsx(
-        "flex flex-col items-center justify-center bg-on-background text-on-primary select-none p-3 text-center",
+        "relative overflow-hidden bg-surface-container-low select-none",
         className,
       )}
-      aria-label={name}
+      aria-label={brand ? `${brand} — ${name}` : name}
     >
-      <span
-        className={clsx(
-          "font-mono font-black tracking-widest uppercase leading-none",
-          sizeClass,
+      {/* La Niche logo watermark — same treatment as PerfumeArtwork. */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        {logoFailed ? (
+          <span className="text-on-surface-variant/15 font-mono font-bold tracking-[0.4em] text-3xl">
+            LN
+          </span>
+        ) : (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src="/logo-laniche.png"
+            alt=""
+            className={clsx(
+              "object-contain opacity-[0.07]",
+              isLarge ? "w-3/4 h-3/4" : "w-2/3 h-2/3",
+            )}
+            onError={() => setLogoFailed(true)}
+          />
         )}
-      >
-        {monogram(brand, name)}
-      </span>
-      {(fallbackSize === "lg" || fallbackSize === "xl") && brand && (
-        <span className="mt-3 text-[9px] uppercase tracking-[0.3em] text-on-primary/50 line-clamp-1 max-w-full">
-          {brand}
-        </span>
+      </div>
+
+      <div className="absolute inset-0 bg-gradient-to-t from-on-background/15 via-transparent to-transparent pointer-events-none" />
+
+      {/* Brand + name overlay — only visible when there's room. */}
+      {!isXSmall && (
+        <div className="relative h-full w-full flex flex-col items-center justify-center px-2 text-center">
+          {brand && (
+            <p
+              className={clsx(
+                "uppercase tracking-[0.3em] text-outline leading-tight",
+                isLarge ? "text-[10px]" : "text-[8px]",
+              )}
+            >
+              {brand}
+            </p>
+          )}
+          <p
+            className={clsx(
+              "font-semibold tracking-tight leading-tight mt-0.5 line-clamp-2",
+              isLarge ? "text-base" : "text-[11px]",
+            )}
+          >
+            {name}
+          </p>
+        </div>
       )}
     </div>
   );
-}
-
-function monogram(brand: string | undefined, name: string): string {
-  if (brand) {
-    const parts = brand.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-    return brand.slice(0, 2).toUpperCase();
-  }
-  const words = name.split(/\s+/).filter(Boolean);
-  if (words.length >= 2) {
-    return (words[0][0] + words[1][0]).toUpperCase();
-  }
-  return name.slice(0, 2).toUpperCase();
 }

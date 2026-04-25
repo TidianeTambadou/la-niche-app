@@ -20,6 +20,11 @@ import {
   BOUTIQUE_IDS,
   findBoutiqueByUrl,
 } from "@/lib/boutiques";
+import {
+  hasPerfumeData,
+  runFragranticaAgent,
+  type PerfumeJson,
+} from "@/lib/fragrantica-agent";
 
 /* ─── In-memory search cache (per Vercel instance) ─────────────────────── */
 
@@ -56,12 +61,20 @@ const FRAGRANCE_KB_DOMAINS = [
   "nstperfume.com",
 ];
 
-type TavilyResult = { title: string; url: string; content: string };
+type TavilyResult = {
+  title: string;
+  url: string;
+  content: string;
+  /** Full page HTML when `include_raw_content` is true. Lets us extract
+   *  reliable bottle image URLs (`fimgs.net/mdimg/...`) downstream. */
+  raw_content?: string;
+};
 
 async function tavilySearchRaw(
   query: string,
   domains: string[],
   maxResults = 5,
+  opts: { rawContent?: boolean } = {},
 ): Promise<TavilyResult[]> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) return [];
@@ -74,11 +87,58 @@ async function tavilySearchRaw(
       include_domains: domains,
       search_depth: "advanced",
       max_results: maxResults,
+      include_raw_content: opts.rawContent ?? false,
     }),
   });
   if (!res.ok) return [];
   const data = (await res.json()) as { results?: TavilyResult[] };
   return data.results ?? [];
+}
+
+/* ─── Image URL allowlist ──────────────────────────────────────────────── */
+
+const IMAGE_HOSTS = [
+  "fimgs.net",
+  "fragrantica.fr",
+  "fragrantica.com",
+  "www.fragrantica.fr",
+  "www.fragrantica.com",
+];
+
+/** Strict allowlist of hosts the LLM is allowed to return as `image_url`.
+ *  Filters out garbage like ad-tracker pixels or hallucinated CDNs. */
+function isValidPerfumeImageUrl(url: unknown): url is string {
+  if (typeof url !== "string" || !url) return false;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    return IMAGE_HOSTS.some(
+      (allowed) => host === allowed || host.endsWith(`.${allowed}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Flatten the agent's pyramid + accords into a short ≤80 char human string
+ *  for `IdentifyResult.notes_brief`. */
+function buildNotesBriefFromPyramid(p: PerfumeJson): string {
+  const parts: string[] = [];
+  for (const list of [p.notes.top, p.notes.middle, p.notes.base, p.accords]) {
+    if (Array.isArray(list)) parts.push(...list);
+  }
+  // Dedupe while preserving order, then trim to 80 chars.
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const v of parts) {
+    const k = v.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    unique.push(v);
+  }
+  const joined = unique.join(", ");
+  return joined.length <= 80 ? joined : joined.slice(0, 77) + "…";
 }
 
 /* ─── Source-URL picker ──────────────────────────────────────────────────
@@ -293,52 +353,79 @@ export async function POST(req: Request) {
     if (cached) return NextResponse.json({ ok: true, mode: "search", candidates: cached } satisfies AgentResponse);
 
     try {
-      // Keep the raw Tavily results around so we can map each candidate to
-      // its actual Fragrantica perfume page URL (needed for og:image scrape).
+      // Tavily with raw_content → we get the actual Fragrantica HTML, which
+      // contains the real fimgs.net bottle image URLs. The LLM is asked to
+      // pull image_url out of the matching <img itemprop="image"> tag.
       const rawResults = await tavilySearchRaw(
-        `parfum ${query} site:fragrantica.com`,
-        FRAGRANCE_KB_DOMAINS,
+        `parfum ${query} site:fragrantica.fr`,
+        ["fragrantica.fr", "www.fragrantica.fr"],
         6,
+        { rawContent: true },
       );
       const webResults = rawResults.length
         ? rawResults
-            .map((r) => `## ${r.title}\nSource: ${r.url}\n${r.content}`)
+            .map((r) => {
+              const body = r.raw_content
+                ? r.raw_content.slice(0, 6000)
+                : r.content;
+              return `URL: ${r.url}\nTitle: ${r.title}\n\n${body}`;
+            })
             .join("\n\n---\n\n")
         : "[Tavily: aucun résultat]";
+
+      const userPrompt = `Requête autocomplete: "${query}"
+
+Résultats fragrantica.fr (HTML brut tronqué) :
+${webResults}
+
+Extrait jusqu'à 4 parfums correspondant à la requête. Pour CHAQUE parfum :
+- name, brand, family (≤ 30 char), notes_brief (≤ 50 char)
+- image_url : URL exacte de l'image principale du flacon trouvée dans le HTML.
+  - Cherche le tag <img itemprop="image" src="..."> ou un <img> dans <picture>
+  - Format attendu : https://fimgs.net/mdimg/perfume-thumbs/375x500.<ID>.jpg
+  - Utilise UNIQUEMENT l'URL exacte trouvée dans le HTML, ne l'invente jamais.
+  - Si introuvable, mets null.
+- source_url : URL fragrantica.fr du parfum (depuis "URL:" dans les résultats)
+
+JSON STRICT, sans markdown :
+{"candidates":[{"name":"","brand":"","notes_brief":"","family":"","image_url":null,"source_url":""}]}`;
 
       const text = await openRouterCall(
         apiKey,
         [
           { role: "system", content: SEARCH_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Requête autocomplete: "${query}"\n\nRésultats web:\n${webResults}\n\nJSON STRICT, max 4 candidats:\n{"candidates":[{"name":"...","brand":"...","notes_brief":"≤50 char","family":"≤30 char"}]}`,
-          },
+          { role: "user", content: userPrompt },
         ],
-        600,
+        900,
       );
 
-      const parsed = extractJson(text) as { candidates?: Partial<SearchCandidate>[] };
-      const baseCandidates = (parsed.candidates ?? [])
+      const parsed = extractJson(text) as {
+        candidates?: Array<Partial<SearchCandidate> & { source_url?: string }>;
+      };
+      const candidates: SearchCandidate[] = (parsed.candidates ?? [])
         .filter((c) => c.name && c.brand)
         .slice(0, 4)
         .map((c) => {
-          const sourceUrl = pickSourceUrl(c.brand!, c.name!, rawResults);
+          // Trust the LLM-supplied source_url only if it points to a real
+          // perfume page on fragrantica; otherwise fall back to URL-picker.
+          const llmSource =
+            typeof c.source_url === "string" &&
+            /fragrantica\.[a-z]+\/perfume\//i.test(c.source_url)
+              ? c.source_url
+              : undefined;
+          const sourceUrl =
+            llmSource ?? pickSourceUrl(c.brand!, c.name!, rawResults);
           return {
             name: c.name!,
             brand: c.brand!,
             notes_brief: c.notes_brief ?? "",
             source_url: sourceUrl,
             family: c.family,
-          } satisfies Omit<SearchCandidate, "image_url">;
+            image_url: isValidPerfumeImageUrl(c.image_url)
+              ? c.image_url
+              : undefined,
+          } satisfies SearchCandidate;
         });
-
-      // Image scraping was removed (unreliable). The frontend now renders a
-      // logo-watermarked placeholder card with brand + name + notes.
-      const candidates: SearchCandidate[] = baseCandidates.map((c) => ({
-        ...c,
-        image_url: undefined,
-      }));
 
       rememberSearch(cacheKey, candidates);
       return NextResponse.json({ ok: true, mode: "search", candidates } satisfies AgentResponse);
@@ -379,29 +466,29 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: true, mode: "identify", result: null } satisfies AgentResponse);
       }
 
-      // Step 2 — Fragrantica enrichment via Tavily
-      const webResults = await tavilySearch(`${vision.brand} ${vision.name} fragrantica.com notes`);
-      const enrichText = await openRouterCall(
-        apiKey,
-        [
-          { role: "system", content: IDENTIFY_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Parfum identifié: ${vision.brand} - ${vision.name}\n\nDonnées web:\n${webResults}\n\nJSON:\n{"name":"...","brand":"...","confidence":${vision.confidence ?? 0.7},"notes_brief":"≤80 chars","source_url":"URL fragrantica"}`,
-          },
-        ],
-        400,
-      );
+      // Step 2 — full Fragrantica agentic loop. The agent makes its own
+      // Tavily tool calls (up to 4 iterations) until it can extract real
+      // pyramid + image_url from the perfume's fragrantica.fr page.
+      const enriched: PerfumeJson = await runFragranticaAgent({
+        query: `${vision.brand} ${vision.name}`,
+      });
 
-      const enriched = extractJson(enrichText) as Partial<IdentifyResult>;
+      const enrichedNotesBrief = buildNotesBriefFromPyramid(enriched);
       const result: IdentifyResult = {
         name: enriched.name ?? vision.name,
         brand: enriched.brand ?? vision.brand,
-        confidence: enriched.confidence ?? vision.confidence ?? 0.7,
-        notes_brief: enriched.notes_brief ?? vision.notes_brief ?? "",
-        source_url:
-          enriched.source_url ??
-          `https://www.fragrantica.com/search/?query=${encodeURIComponent(`${vision.brand} ${vision.name}`)}`,
+        confidence: vision.confidence ?? 0.7,
+        notes_brief:
+          enrichedNotesBrief ||
+          enriched.description?.slice(0, 80) ||
+          vision.notes_brief ||
+          "",
+        source_url: hasPerfumeData(enriched)
+          ? `https://www.fragrantica.fr/recherche.php?q=${encodeURIComponent(`${vision.brand} ${vision.name}`)}`
+          : `https://www.fragrantica.com/search/?query=${encodeURIComponent(`${vision.brand} ${vision.name}`)}`,
+        ...(isValidPerfumeImageUrl(enriched.image_url)
+          ? { image_url: enriched.image_url }
+          : {}),
       };
 
       return NextResponse.json({ ok: true, mode: "identify", result } satisfies AgentResponse);

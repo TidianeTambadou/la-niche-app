@@ -17,8 +17,8 @@ import {
 } from "@/lib/fragrances";
 import { fragranceKey, useFragrances, type Fragrance } from "@/lib/data";
 import { useStore, type BodyPlacement } from "@/lib/store";
-import { agentAsk, agentSearch } from "@/lib/agent-client";
-import type { SearchCandidate } from "@/lib/agent";
+import { agentAsk, agentIdentify, agentSearch } from "@/lib/agent-client";
+import type { IdentifyResult, SearchCandidate } from "@/lib/agent";
 
 export default function FreeBaladePage() {
   const router = useRouter();
@@ -571,13 +571,16 @@ Décris en 3-4 phrases concrètes ce que ce mélange va donner sur la peau : acc
 function PlacementThumbnail({
   imageUrl,
   name,
+  brand,
   size = "sm",
 }: {
   imageUrl: string | null | undefined;
   name: string;
+  brand?: string;
   size?: "xs" | "sm" | "md" | "lg";
 }) {
   const [failed, setFailed] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
   // Inline-styled square — guarantees the thumbnail stays exactly this size,
   // independent of any flex/parent constraints. Tailwind w-* classes were
   // sometimes losing to natural image size in flex parents.
@@ -595,6 +598,7 @@ function PlacementThumbnail({
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    position: "relative",
   };
   const imgStyle: React.CSSProperties = {
     width: "100%",
@@ -604,15 +608,40 @@ function PlacementThumbnail({
   };
 
   if (!imageUrl || failed) {
+    // La Niche logo watermark fallback — keeps the visual language unified
+    // with the home daily-picks card and the search/recommendation cards.
     return (
       <div
         style={boxStyle}
-        className="bg-surface-container-high border border-outline-variant text-on-surface-variant font-bold font-mono"
-        aria-hidden
+        className="bg-surface-container-low border border-outline-variant"
+        aria-label={brand ? `${brand} — ${name}` : name}
       >
-        <span style={{ fontSize: px <= 28 ? 9 : 10 }}>
-          {fragranceInitials(name)}
-        </span>
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          {logoFailed ? (
+            <span
+              className="text-on-surface-variant/25 font-mono font-bold tracking-widest"
+              style={{ fontSize: px <= 28 ? 8 : 10 }}
+            >
+              LN
+            </span>
+          ) : (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src="/logo-laniche.png"
+              alt=""
+              className="object-contain opacity-[0.18] w-3/4 h-3/4"
+              onError={() => setLogoFailed(true)}
+            />
+          )}
+        </div>
+        {px >= 40 && (
+          <span
+            className="relative font-bold uppercase tracking-tight text-on-background/70 px-1 text-center leading-tight line-clamp-2"
+            style={{ fontSize: px <= 44 ? 7 : 9 }}
+          >
+            {fragranceInitials(name)}
+          </span>
+        )}
       </div>
     );
   }
@@ -922,6 +951,7 @@ function QuestionScreen({
                 <PerfumeArtwork
                   brand={c.brand}
                   name={c.name}
+                  imageUrl={c.image_url}
                   variant="thumb"
                   className="w-10 h-10 flex-shrink-0"
                 />
@@ -1055,11 +1085,14 @@ function PickerSheet({
   icon,
   onClose,
   children,
+  /** "tall" gives the sheet ~88vh — needed for the camera scan to have room. */
+  size = "compact",
 }: {
   title: string;
   icon: string;
   onClose: () => void;
   children: React.ReactNode;
+  size?: "compact" | "tall";
 }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
@@ -1074,14 +1107,15 @@ function PickerSheet({
       aria-modal="true"
     >
       <div
-        className="absolute inset-0 bg-primary/10 transition-opacity duration-300"
+        className="absolute inset-0 bg-on-background/40 transition-opacity duration-300"
         style={{ opacity: mounted ? 1 : 0 }}
         onClick={onClose}
         aria-hidden
       />
       <div
         className={clsx(
-          "relative w-full max-w-screen-md bg-background border-t border-outline-variant max-h-[38vh] flex flex-col safe-bottom shadow-2xl transition-transform duration-300 ease-out",
+          "relative w-full max-w-screen-md bg-background border-t border-outline-variant flex flex-col safe-bottom shadow-2xl transition-transform duration-300 ease-out",
+          size === "tall" ? "h-[92vh] max-h-[92vh]" : "max-h-[38vh]",
           mounted ? "translate-y-0" : "translate-y-full",
         )}
         onClick={(e) => e.stopPropagation()}
@@ -1123,13 +1157,19 @@ function ScanSheet({
       title="Scanner un parfum"
       icon="qr_code_scanner"
       onClose={onClose}
+      size="tall"
     >
       <ScanPanel fragrances={fragrances} onPick={onPick} />
     </PickerSheet>
   );
 }
 
-/* ---- Scan panel — inline camera + mock recognition ------------------- */
+/* ---- Scan panel — real La Niche team recognition (agentIdentify) -------
+ * Uses the same vision pipeline as /scan: capture → resize to 768 px max
+ * edge → POST to /api/agent. Matched perfumes from the local catalog feed
+ * straight into the placement flow; external Fragrantica picks are
+ * synthesised into a Fragrance so the user can still drop them on the body.
+ * --------------------------------------------------------------------- */
 
 function ScanPanel({
   fragrances,
@@ -1139,17 +1179,22 @@ function ScanPanel({
   onPick: (f: Fragrance) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const [stage, setStage] = useState<"idle" | "live" | "scanning" | "result">(
-    "idle",
-  );
+  const [stage, setStage] = useState<
+    "idle" | "live" | "scanning" | "result" | "no-match"
+  >("idle");
   const [result, setResult] = useState<Fragrance | null>(null);
+  const [identified, setIdentified] = useState<IdentifyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function stopCamera() {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
   }
   useEffect(() => stopCamera, []);
@@ -1166,13 +1211,9 @@ function ScanPanel({
 
   async function startCamera() {
     setError(null);
-    if (fragrances.length === 0) {
-      setError("Aucun parfum dans le catalogue à reconnaître.");
-      return;
-    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: { ideal: "environment" } },
         audio: false,
       });
       streamRef.current = stream;
@@ -1188,34 +1229,102 @@ function ScanPanel({
     }
   }
 
-  function captureAndIdentify() {
-    if (fragrances.length === 0) return;
+  async function captureAndIdentify() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) {
+      setError("La caméra n'est pas prête. Réessaie.");
+      return;
+    }
+
     setStage("scanning");
-    setTimeout(() => {
-      const pick =
-        fragrances[Math.floor(Math.random() * fragrances.length)];
+    setError(null);
+
+    // Downscale to a 768 px max edge — enough for label legibility, keeps
+    // the request small.
+    const MAX_EDGE = 768;
+    const ratio = Math.min(
+      1,
+      MAX_EDGE / Math.max(video.videoWidth, video.videoHeight),
+    );
+    const w = Math.round(video.videoWidth * ratio);
+    const h = Math.round(video.videoHeight * ratio);
+
+    const canvas = canvasRef.current ?? document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setError("Impossible de capturer l'image.");
+      setStage("live");
+      return;
+    }
+    ctx.drawImage(video, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    const base64 = dataUrl.split(",")[1] ?? "";
+    if (!base64) {
+      setError("Impossible d'encoder l'image.");
+      setStage("live");
+      return;
+    }
+
+    try {
+      const id = await agentIdentify(base64, "image/jpeg");
       stopCamera();
-      setResult(pick);
+      if (!id) {
+        setStage("no-match");
+        return;
+      }
+      const matched = matchToCatalog(id, fragrances);
+      const synthetic: Fragrance = matched ?? {
+        key: fragranceKey(id.brand, id.name),
+        id: fragranceKey(id.brand, id.name),
+        name: id.name,
+        brand: id.brand,
+        imageUrl: id.image_url ?? null,
+        reference: `FR-${fragranceKey(id.brand, id.name).slice(0, 6).toUpperCase()}`,
+        availability: [],
+        bestPrice: null,
+        tags: id.notes_brief ? [id.notes_brief] : [],
+        family: undefined,
+      };
+      setIdentified(id);
+      setResult(synthetic);
       setStage("result");
-    }, 1200);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "identify failed");
+      setStage("live");
+    }
+  }
+
+  function reset() {
+    setResult(null);
+    setIdentified(null);
+    setError(null);
+    setStage("idle");
   }
 
   return (
     <div className="flex-1 flex flex-col px-6 py-4 overflow-y-auto">
+      <canvas ref={canvasRef} className="hidden" />
+
       {stage === "idle" && (
-        <div className="flex flex-col items-center justify-center text-center gap-4 py-6">
+        <div className="flex flex-col items-center justify-center text-center gap-4 py-8">
           <Icon
             name="qr_code_scanner"
-            size={36}
+            size={42}
             className="text-on-surface-variant"
           />
-          <p className="text-xs text-on-surface-variant max-w-xs">
-            Pointe sur un flacon. La reconnaissance s&apos;active à la capture.
+          <p className="text-sm text-on-surface-variant max-w-xs leading-relaxed">
+            Pointe la caméra sur un flacon. L&apos;équipe La Niche identifie le
+            parfum à partir de l&apos;image.
           </p>
           {error && (
-            <p className="text-[11px] text-error border border-error/40 px-3 py-2 max-w-xs">
-              {error}
-            </p>
+            <ErrorBubble
+              detail={error}
+              context="Balade · scan caméra"
+              variant="block"
+              className="max-w-xs"
+            />
           )}
           <button
             type="button"
@@ -1229,34 +1338,45 @@ function ScanPanel({
       )}
 
       {(stage === "live" || stage === "scanning") && (
-        <div className="flex flex-col gap-3">
-          <div className="relative aspect-video bg-on-background overflow-hidden">
+        <div className="flex flex-col gap-3 flex-1 min-h-0">
+          <div className="relative flex-1 min-h-0 bg-on-background overflow-hidden">
             <video
               ref={videoRef}
               playsInline
+              autoPlay
               muted
               className="w-full h-full object-cover"
             />
             <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-              <div className="w-2/3 aspect-square border border-on-primary/80" />
+              <div className="w-3/4 aspect-square border border-on-primary/80 relative">
+                <Corner pos="top-left" />
+                <Corner pos="top-right" />
+                <Corner pos="bottom-left" />
+                <Corner pos="bottom-right" />
+              </div>
             </div>
             {stage === "scanning" && (
               <div className="absolute inset-0 bg-primary/40 flex items-center justify-center">
-                <div className="flex gap-1">
-                  <span className="w-2 h-2 bg-on-primary rounded-full animate-pulse" />
-                  <span
-                    className="w-2 h-2 bg-on-primary rounded-full animate-pulse"
-                    style={{ animationDelay: "150ms" }}
-                  />
-                  <span
-                    className="w-2 h-2 bg-on-primary rounded-full animate-pulse"
-                    style={{ animationDelay: "300ms" }}
-                  />
+                <div className="flex flex-col items-center gap-3">
+                  <div className="flex gap-1">
+                    <span className="w-2 h-2 bg-on-primary rounded-full animate-pulse" />
+                    <span
+                      className="w-2 h-2 bg-on-primary rounded-full animate-pulse"
+                      style={{ animationDelay: "150ms" }}
+                    />
+                    <span
+                      className="w-2 h-2 bg-on-primary rounded-full animate-pulse"
+                      style={{ animationDelay: "300ms" }}
+                    />
+                  </div>
+                  <span className="text-[10px] uppercase tracking-widest font-mono text-on-primary">
+                    L&apos;équipe La Niche analyse…
+                  </span>
                 </div>
               </div>
             )}
             <span className="absolute top-2 left-2 text-[10px] uppercase tracking-widest font-mono bg-background/80 px-2 py-1 border border-outline-variant">
-              {stage === "scanning" ? "ANALYSE…" : "CADRE"}
+              {stage === "scanning" ? "ANALYSE…" : "CADRE LE FLACON"}
             </span>
           </div>
           <button
@@ -1268,28 +1388,72 @@ function ScanPanel({
             <Icon name="center_focus_strong" size={14} />
             {stage === "scanning" ? "Analyse en cours" : "Capturer"}
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              stopCamera();
+              setStage("idle");
+            }}
+            disabled={stage === "scanning"}
+            className="w-full py-2.5 border border-outline-variant rounded-full text-[10px] uppercase tracking-widest font-bold hover:border-primary disabled:opacity-40 transition-colors"
+          >
+            Annuler
+          </button>
         </div>
       )}
 
-      {stage === "result" && result && (
+      {stage === "no-match" && (
+        <div className="flex flex-col items-center text-center gap-4 py-8">
+          <Icon name="search_off" size={36} className="text-outline" />
+          <p className="text-sm text-on-surface-variant max-w-xs">
+            Aucun parfum identifié. Essaie avec un meilleur cadrage, une
+            étiquette lisible, ou plus de lumière.
+          </p>
+          <button
+            type="button"
+            onClick={startCamera}
+            className="px-6 py-3 bg-primary text-on-primary rounded-full text-[10px] uppercase tracking-widest font-bold active:scale-95 transition-transform flex items-center gap-2"
+          >
+            <Icon name="photo_camera" size={14} />
+            Réessayer
+          </button>
+          <button
+            type="button"
+            onClick={reset}
+            className="text-[10px] uppercase tracking-widest font-bold text-outline hover:text-on-background"
+          >
+            Retour
+          </button>
+        </div>
+      )}
+
+      {stage === "result" && result && identified && (
         <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-3 border border-outline-variant p-3">
-            <div className="w-12 h-16 bg-surface-container-low overflow-hidden flex-shrink-0">
-              {result.imageUrl && (
-                <img
-                  src={result.imageUrl}
-                  alt=""
-                  className="w-full h-full object-cover grayscale"
-                />
-              )}
-            </div>
+          <div className="flex items-stretch gap-3 border border-outline-variant p-3">
+            <PerfumeArtwork
+              brand={result.brand}
+              name={result.name}
+              imageUrl={identified.image_url ?? result.imageUrl ?? undefined}
+              variant="thumb"
+              className="w-16 h-20 flex-shrink-0"
+            />
             <div className="min-w-0 flex-1">
               <p className="text-[10px] uppercase tracking-[0.15em] text-outline">
                 {result.brand}
               </p>
-              <p className="text-sm font-medium truncate">{result.name}</p>
-              <p className="text-[10px] uppercase tracking-widest text-primary mt-0.5">
-                Match 96%
+              <p className="text-sm font-semibold tracking-tight">
+                {result.name}
+              </p>
+              {identified.notes_brief && (
+                <p className="text-[10px] text-on-surface-variant mt-1 leading-snug line-clamp-2">
+                  {identified.notes_brief}
+                </p>
+              )}
+              <p className="text-[10px] uppercase tracking-widest text-primary mt-1">
+                Match {Math.round((identified.confidence ?? 0) * 100)}%
+                {fragrances.find((f) => f.key === result.key)
+                  ? " · En boutique"
+                  : " · Hors catalogue"}
               </p>
             </div>
           </div>
@@ -1298,6 +1462,7 @@ function ScanPanel({
               type="button"
               onClick={() => {
                 setResult(null);
+                setIdentified(null);
                 setStage("idle");
               }}
               className="flex-1 py-3 border border-outline-variant rounded-full text-[10px] uppercase tracking-widest font-bold hover:border-primary transition-colors"
@@ -1307,15 +1472,66 @@ function ScanPanel({
             <button
               type="button"
               onClick={() => onPick(result)}
-              className="flex-1 py-3 bg-primary text-on-primary rounded-full text-[10px] uppercase tracking-widest font-bold active:scale-95 transition-transform"
+              className="flex-1 py-3 bg-primary text-on-primary rounded-full text-[10px] uppercase tracking-widest font-bold active:scale-95 transition-transform flex items-center justify-center gap-1.5"
             >
-              Poser ici
+              <Icon name="touch_app" size={14} />
+              Placer sur le corps
             </button>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+/* ---- Catalog matching helpers (mirror /scan) -------------------------- */
+
+function normalize(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function matchToCatalog(
+  agent: IdentifyResult,
+  fragrances: Fragrance[],
+): Fragrance | null {
+  const target = `${normalize(agent.brand)} ${normalize(agent.name)}`.trim();
+  if (!target) return null;
+  for (const f of fragrances) {
+    if (`${normalize(f.brand)} ${normalize(f.name)}`.trim() === target)
+      return f;
+  }
+  const targetTokens = new Set(target.split(" ").filter(Boolean));
+  let best: { f: Fragrance; score: number } | null = null;
+  for (const f of fragrances) {
+    const candTokens = `${normalize(f.brand)} ${normalize(f.name)}`
+      .trim()
+      .split(" ")
+      .filter(Boolean);
+    const overlap = candTokens.filter((t) => targetTokens.has(t)).length;
+    const score = overlap / Math.max(candTokens.length, targetTokens.size);
+    if (score > 0.6 && (!best || score > best.score)) best = { f, score };
+  }
+  return best?.f ?? null;
+}
+
+function Corner({
+  pos,
+}: {
+  pos: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+}) {
+  const baseStyle = "absolute w-5 h-5 border-on-primary";
+  const variants: Record<typeof pos, string> = {
+    "top-left": "top-0 left-0 border-t-2 border-l-2",
+    "top-right": "top-0 right-0 border-t-2 border-r-2",
+    "bottom-left": "bottom-0 left-0 border-b-2 border-l-2",
+    "bottom-right": "bottom-0 right-0 border-b-2 border-r-2",
+  };
+  return <div className={`${baseStyle} ${variants[pos]}`} />;
 }
 
 /* -------------------------------------------------------------------------
