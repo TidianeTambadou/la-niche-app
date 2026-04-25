@@ -362,18 +362,17 @@ export async function POST(req: Request) {
         6,
         { rawContent: true },
       );
-      const webResults = rawResults.length
-        ? rawResults
-            .map((r) => {
-              const body = r.raw_content
-                ? r.raw_content.slice(0, 6000)
-                : r.content;
-              return `URL: ${r.url}\nTitle: ${r.title}\n\n${body}`;
-            })
-            .join("\n\n---\n\n")
-        : "[Tavily: aucun résultat]";
-
-      const userPrompt = `Requête autocomplete: "${query}"
+      const userPrompt = rawResults.length
+        ? (() => {
+            const webResults = rawResults
+              .map((r) => {
+                const body = r.raw_content
+                  ? r.raw_content.slice(0, 6000)
+                  : r.content;
+                return `URL: ${r.url}\nTitle: ${r.title}\n\n${body}`;
+              })
+              .join("\n\n---\n\n");
+            return `Requête autocomplete: "${query}"
 
 Résultats fragrantica.fr (HTML brut tronqué) :
 ${webResults}
@@ -386,6 +385,21 @@ Extrait jusqu'à 4 parfums correspondant à la requête. Pour CHAQUE parfum :
   - Utilise UNIQUEMENT l'URL exacte trouvée dans le HTML, ne l'invente jamais.
   - Si introuvable, mets null.
 - source_url : URL fragrantica.fr du parfum (depuis "URL:" dans les résultats)
+
+JSON STRICT, sans markdown :
+{"candidates":[{"name":"","brand":"","notes_brief":"","family":"","image_url":null,"source_url":""}]}`;
+          })()
+        : `Requête: "${query}"
+
+Aucune donnée web disponible. Utilise tes connaissances sur les parfums (fragrantica.com, basenotes.com) pour proposer jusqu'à 4 parfums correspondant à cette requête.
+
+Pour CHAQUE parfum :
+- name : nom exact du parfum
+- brand : marque exacte
+- family : famille olfactive (≤ 30 char, ex: Woody, Floral, Citrus…)
+- notes_brief : notes principales (≤ 50 char, ex: "Bergamote, Cèdre, Vétiver")
+- image_url : null (pas de données HTML disponibles)
+- source_url : URL fragrantica.com si tu la connais avec certitude, sinon https://www.fragrantica.com/search/?query=${encodeURIComponent(query)}
 
 JSON STRICT, sans markdown :
 {"candidates":[{"name":"","brand":"","notes_brief":"","family":"","image_url":null,"source_url":""}]}`;
