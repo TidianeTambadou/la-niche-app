@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
+import { FragranceImage } from "@/components/FragranceImage";
 import { agentSearch } from "@/lib/agent-client";
 import type { SearchCandidate } from "@/lib/agent";
-import { fragranceKey, useFragrances } from "@/lib/data";
+import { fragranceKey, searchFragrances, useFragrances } from "@/lib/data";
+import type { Fragrance } from "@/lib/fragrances";
 import { useStore } from "@/lib/store";
 
 const SUGGESTIONS = [
@@ -20,21 +22,33 @@ const SUGGESTIONS = [
 
 export default function SearchPage() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchCandidate[]>([]);
+  const [agentResults, setAgentResults] = useState<SearchCandidate[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const allFragrances = useFragrances();
 
-  // Debounced search — same pattern as the balade libre autocomplete: 800ms
-  // after the last keystroke, ≥3 chars, hits /api/agent which queries
-  // Fragrantica + Basenotes + Parfumo + Fragrancex + nstperfume.
+  // Instant local-catalog search (no API key needed).
+  const localResults = useMemo<Fragrance[]>(() => {
+    const q = query.trim();
+    if (q.length < 3) return [];
+    return searchFragrances(allFragrances, q).slice(0, 8);
+  }, [allFragrances, query]);
+
+  // Keys already shown in local section — we exclude duplicates from AI results.
+  const localKeys = useMemo(
+    () => new Set(localResults.map((f) => f.key)),
+    [localResults],
+  );
+
+  // Debounced AI agent search — queries Fragrantica via Tavily + LLM.
   useEffect(() => {
     const q = query.trim();
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (abortRef.current) abortRef.current.abort();
     if (q.length < 3) {
-      setResults([]);
+      setAgentResults([]);
       setLoading(false);
       setError(null);
       return;
@@ -47,7 +61,7 @@ export default function SearchPage() {
       try {
         const r = await agentSearch(q, ctrl.signal);
         if (!ctrl.signal.aborted) {
-          setResults(r);
+          setAgentResults(r);
           setLoading(false);
         }
       } catch (e: unknown) {
@@ -61,6 +75,13 @@ export default function SearchPage() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [query]);
+
+  // Agent results excluding items already shown in the local catalog section.
+  const externalResults = agentResults.filter(
+    (c) => !localKeys.has(fragranceKey(c.brand, c.name)),
+  );
+
+  const hasQuery = query.trim().length >= 3;
 
   return (
     <div className="px-6 pt-4 pb-24">
@@ -79,12 +100,8 @@ export default function SearchPage() {
         loading={loading}
       />
 
-      <p className="text-[10px] uppercase tracking-widest text-outline mt-3 leading-relaxed">
-        Sources : Fragrantica · Basenotes · Parfumo · Fragrancex · nstperfume
-      </p>
-
       {/* Suggestions when no query yet */}
-      {query.trim().length < 3 && !loading && results.length === 0 && (
+      {!hasQuery && (
         <section className="mt-8">
           <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-outline mb-3">
             Essais rapides
@@ -104,44 +121,57 @@ export default function SearchPage() {
         </section>
       )}
 
+      {/* Local catalog results — instant, no API needed */}
+      {hasQuery && localResults.length > 0 && (
+        <section className="mt-8">
+          <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-outline mb-3">
+            En boutique · {localResults.length}
+          </p>
+          <ul className="flex flex-col">
+            {localResults.map((f) => (
+              <LocalResult key={f.key} fragrance={f} />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* AI agent results — Fragrantica via Tavily + LLM */}
       {error && (
         <div className="mt-6">
           <ErrorBubble
             detail={error}
-            context="Recherche · agentSearch"
+            context="Recherche · agent Fragrantica"
             variant="block"
           />
         </div>
       )}
 
-      {loading && results.length === 0 && (
-        <ul className="mt-8 space-y-3">
-          {[0, 1, 2, 3].map((i) => (
-            <li
-              key={i}
-              className="h-20 bg-surface-container-low animate-pulse"
-            />
-          ))}
-        </ul>
+      {loading && (
+        <div className="mt-8 flex items-center gap-2 text-outline">
+          <Icon name="progress_activity" size={14} className="animate-spin" />
+          <span className="text-[10px] uppercase tracking-widest">
+            Recherche sur Fragrantica…
+          </span>
+        </div>
       )}
 
-      {!loading && !error && query.trim().length >= 3 && results.length === 0 && (
-        <p className="text-sm text-on-surface-variant mt-8 italic">
-          Aucun résultat sur Fragrantica pour «&nbsp;{query}&nbsp;».
-        </p>
-      )}
-
-      {results.length > 0 && (
-        <section className="mt-8">
+      {!loading && !error && hasQuery && externalResults.length > 0 && (
+        <section className="mt-6">
           <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-outline mb-3">
-            {results.length} résultat{results.length > 1 ? "s" : ""}
+            Fragrantica · {externalResults.length}
           </p>
           <ul className="flex flex-col">
-            {results.map((c, i) => (
+            {externalResults.map((c, i) => (
               <SearchResult key={`${c.brand}-${c.name}-${i}`} candidate={c} />
             ))}
           </ul>
         </section>
+      )}
+
+      {hasQuery && !loading && localResults.length === 0 && externalResults.length === 0 && !error && (
+        <p className="text-sm text-on-surface-variant mt-8 italic">
+          Aucun résultat pour «&nbsp;{query}&nbsp;».
+        </p>
       )}
     </div>
   );
@@ -185,6 +215,67 @@ function SearchBar({
         </button>
       ) : null}
     </div>
+  );
+}
+
+function LocalResult({ fragrance }: { fragrance: Fragrance }) {
+  const { addToWishlist, isWishlisted } = useStore();
+  const wishlistStatus = isWishlisted(fragrance.key);
+  const shopCount = fragrance.availability.length;
+
+  return (
+    <li className="py-4 border-b border-outline-variant/30 last:border-0">
+      <div className="flex items-start gap-3">
+        <Link
+          href={`/fragrance/${fragrance.key}`}
+          className="block w-16 h-20 flex-shrink-0 bg-surface-container-low overflow-hidden"
+        >
+          <FragranceImage
+            src={fragrance.imageUrl}
+            name={fragrance.name}
+            brand={fragrance.brand}
+            fallbackSize="sm"
+            className="w-full h-full object-cover"
+          />
+        </Link>
+        <div className="flex-1 min-w-0">
+          <p className="text-[10px] uppercase tracking-[0.2em] text-outline">
+            {fragrance.brand}
+            {fragrance.family ? ` · ${fragrance.family}` : ""}
+          </p>
+          <Link href={`/fragrance/${fragrance.key}`}>
+            <h3 className="text-base font-semibold tracking-tight">
+              {fragrance.name}
+            </h3>
+          </Link>
+          <p className="text-[11px] text-primary font-bold mt-0.5">
+            {shopCount} boutique{shopCount > 1 ? "s" : ""}
+            {fragrance.bestPrice != null ? ` · ${fragrance.bestPrice} €` : ""}
+          </p>
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() =>
+                addToWishlist(fragrance.key, "liked", "search", {
+                  name: fragrance.name,
+                  brand: fragrance.brand,
+                  imageUrl: fragrance.imageUrl,
+                })
+              }
+              className="text-[10px] uppercase tracking-widest font-bold flex items-center gap-1 hover:text-primary transition-colors"
+            >
+              <Icon
+                name={wishlistStatus === "liked" ? "favorite" : "favorite_border"}
+                filled={wishlistStatus === "liked"}
+                size={14}
+                className={wishlistStatus === "liked" ? "text-primary" : "text-outline"}
+              />
+              {wishlistStatus === "liked" ? "Dans la wishlist" : "Wishlist"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </li>
   );
 }
 

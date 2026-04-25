@@ -319,7 +319,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
 
     const fromStorage = readStorage(userId);
-    setState(fromStorage ?? initialState);
+    setState((prev) => {
+      const base = fromStorage ?? initialState;
+      // Preserve items added before auth resolved (race: user acted while
+      // getSession() was still in-flight — those items were never persisted).
+      if (hydratedForRef.current === undefined && prev.wishlist.length > 0) {
+        const storedIds = new Set(base.wishlist.map((w) => w.fragranceId));
+        const pending = prev.wishlist.filter((w) => !storedIds.has(w.fragranceId));
+        if (pending.length > 0) {
+          return { ...base, wishlist: [...pending, ...base.wishlist] };
+        }
+      }
+      return base;
+    });
     hydratedForRef.current = userId;
   }, [userId, authLoading]);
 

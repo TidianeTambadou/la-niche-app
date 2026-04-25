@@ -194,10 +194,18 @@ export default function EndOfBaladePage() {
                 wishlistStatus={isWishlisted(item.fragranceId)}
                 onFocus={() => setReviewedRowId(item.rowId)}
                 onLike={() =>
-                  addToWishlist(item.fragranceId, "liked", "balade")
+                  addToWishlist(item.fragranceId, "liked", "balade", {
+                    name: item.name,
+                    brand: item.brand,
+                    imageUrl: item.imageUrl,
+                  })
                 }
                 onDislike={() =>
-                  addToWishlist(item.fragranceId, "disliked", "balade")
+                  addToWishlist(item.fragranceId, "disliked", "balade", {
+                    name: item.name,
+                    brand: item.brand,
+                    imageUrl: item.imageUrl,
+                  })
                 }
               />
             ))}
