@@ -2,14 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { NewsRail } from "@/components/NewsRail";
 import { latestNews } from "@/lib/news";
 import { useAuth } from "@/lib/auth";
 import { readProfileFromUser, FAMILY_VULGAR } from "@/lib/profile";
-import { useDailyPicks } from "@/lib/daily-picks";
+import { useDailyPicks, type DailyPicksHook } from "@/lib/daily-picks";
 import type { SearchCandidate } from "@/lib/agent";
+import { useStore } from "@/lib/store";
 
 /* ─── Phrases éditoriales — rotation par jour ─────────────────────────── */
 
@@ -179,7 +181,7 @@ export default function HomePage() {
             Du jour
           </span>
         </div>
-        <DailyCarousel state={dailyPicks} hasProfile={!!profile} />
+        <DailyShowcase hook={dailyPicks} hasProfile={!!profile} />
       </section>
 
       {/* ── Actualité ───────────────────────────────────────────────────── */}
@@ -238,25 +240,23 @@ function QuickAction({
   );
 }
 
-/* ─── Daily picks carousel ──────────────────────────────────────────────── */
+/* ─── Daily picks — La Niche envelope + 3 reveal flashcards ─────────────── */
 
-function DailyCarousel({
-  state,
+function DailyShowcase({
+  hook,
   hasProfile,
 }: {
-  state: ReturnType<typeof useDailyPicks>;
+  hook: DailyPicksHook;
   hasProfile: boolean;
 }) {
+  const { state, reveal } = hook;
+
   if (state.status === "loading") {
     return (
-      <div className="flex gap-4 overflow-hidden -mx-6 px-6">
-        {[0, 1, 2].map((i) => (
-          <div
-            key={i}
-            className="min-w-[78%] sm:min-w-[260px] aspect-[3/4] shimmer-bar flex-shrink-0"
-          />
-        ))}
-      </div>
+      <div
+        className="aspect-[3/4] max-w-md mx-auto shimmer-bar"
+        aria-label="Chargement de la sélection du jour"
+      />
     );
   }
 
@@ -290,16 +290,117 @@ function DailyCarousel({
     );
   }
 
-  return <AutoScrollCarousel picks={state.picks} />;
+  if (!state.revealed) {
+    return <DailyEnvelope picks={state.picks} onOpen={reveal} />;
+  }
+
+  return <DailyFlashcardCarousel picks={state.picks} />;
 }
 
-function AutoScrollCarousel({ picks }: { picks: SearchCandidate[] }) {
+/* La Niche surprise card — what the user sees on first visit each day. Tap
+ * to reveal the 3 flashcards. */
+function DailyEnvelope({
+  picks,
+  onOpen,
+}: {
+  picks: SearchCandidate[];
+  onOpen: () => void;
+}) {
+  const [opening, setOpening] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  function handleOpen() {
+    if (opening) return;
+    setOpening(true);
+    // Wait for the open animation to finish before swapping in the flashcards.
+    window.setTimeout(onOpen, 520);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleOpen}
+      className={clsx(
+        "group block w-full max-w-md mx-auto aspect-[3/4] relative overflow-hidden border border-outline bg-surface-container-low active:scale-[0.985] transition-transform",
+        opening && "envelope-open",
+      )}
+      aria-label={`Découvrir tes ${picks.length} parfums du jour`}
+    >
+      {/* Subtle radial gradient backdrop */}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_30%,rgba(255,255,255,0.08),transparent_60%)] pointer-events-none" />
+
+      <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center gap-5">
+        <span className="text-[10px] uppercase tracking-[0.35em] text-outline">
+          La Niche · {todayLabel()}
+        </span>
+
+        {/* Logo */}
+        <div className="w-20 h-20 rounded-full overflow-hidden bg-background border border-outline-variant flex items-center justify-center">
+          {logoFailed ? (
+            <span className="font-mono font-bold text-base">LN</span>
+          ) : (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src="/logo-laniche.png"
+              alt="La Niche"
+              className="w-full h-full object-cover"
+              onError={() => setLogoFailed(true)}
+            />
+          )}
+        </div>
+
+        <div>
+          <p className="text-2xl font-medium tracking-tighter leading-tight">
+            <span className="italic font-serif font-light">3 parfums</span>
+            <br />
+            choisis pour toi.
+          </p>
+          <p className="text-[11px] text-on-surface-variant mt-3 max-w-xs leading-relaxed">
+            Une carte par jour, basée sur ton univers olfactif. Touche pour
+            révéler les flashcards.
+          </p>
+        </div>
+
+        <span className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-on-primary text-[10px] uppercase tracking-[0.25em] font-bold rounded-full group-active:scale-95 transition-transform">
+          <Icon name="auto_awesome" size={14} />
+          Révéler
+        </span>
+
+        {/* Sealed-envelope hint badges */}
+        <div className="flex gap-1.5 absolute bottom-4 left-1/2 -translate-x-1/2">
+          {picks.map((_, i) => (
+            <span
+              key={i}
+              className="w-2 h-2 rounded-full bg-outline-variant/70"
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Wax-seal style corner mark */}
+      <div className="absolute top-3 right-3 px-2 py-1 bg-on-background text-background text-[9px] font-mono uppercase tracking-widest">
+        Scellée
+      </div>
+    </button>
+  );
+}
+
+function todayLabel(): string {
+  return new Date().toLocaleDateString("fr-FR", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+  });
+}
+
+/* Carousel of 3 flippable flashcards — front shows bottle/brand/name, back
+ * shows family + notes brief + source link + wishlist add. */
+function DailyFlashcardCarousel({ picks }: { picks: SearchCandidate[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
   const userInteracted = useRef(false);
 
-  // Auto-advance every 5s, respecting manual swipes (paused for 8s after a
-  // user touch / scroll). Only kicks in when there are 2+ picks.
+  // Auto-advance every 6s (slower than before — flip animation needs time).
   useEffect(() => {
     if (picks.length < 2) return;
     const id = window.setInterval(() => {
@@ -309,10 +410,13 @@ function AutoScrollCarousel({ picks }: { picks: SearchCandidate[] }) {
       const next = (active + 1) % picks.length;
       const card = el.children[next] as HTMLElement | undefined;
       if (card) {
-        el.scrollTo({ left: card.offsetLeft - el.offsetLeft, behavior: "smooth" });
+        el.scrollTo({
+          left: card.offsetLeft - el.offsetLeft,
+          behavior: "smooth",
+        });
         setActive(next);
       }
-    }, 5000);
+    }, 6000);
     return () => window.clearInterval(id);
   }, [picks.length, active]);
 
@@ -320,18 +424,19 @@ function AutoScrollCarousel({ picks }: { picks: SearchCandidate[] }) {
     userInteracted.current = true;
     window.setTimeout(() => {
       userInteracted.current = false;
-    }, 8000);
+    }, 12000);
   }
 
   function onScroll() {
     const el = scrollRef.current;
     if (!el) return;
-    // Snap to whichever card is closest to the left edge.
     const children = Array.from(el.children) as HTMLElement[];
     let bestIdx = 0;
     let bestDist = Infinity;
     for (let i = 0; i < children.length; i++) {
-      const dist = Math.abs(children[i].offsetLeft - el.scrollLeft - el.offsetLeft);
+      const dist = Math.abs(
+        children[i].offsetLeft - el.scrollLeft - el.offsetLeft,
+      );
       if (dist < bestDist) {
         bestDist = dist;
         bestIdx = i;
@@ -341,7 +446,7 @@ function AutoScrollCarousel({ picks }: { picks: SearchCandidate[] }) {
   }
 
   return (
-    <div>
+    <div className="reveal-fade-in">
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -351,7 +456,12 @@ function AutoScrollCarousel({ picks }: { picks: SearchCandidate[] }) {
         style={{ scrollPaddingLeft: "1.5rem" }}
       >
         {picks.map((p, i) => (
-          <DailyCard key={`${p.brand}-${p.name}-${i}`} pick={p} />
+          <div
+            key={`${p.brand}-${p.name}-${i}`}
+            className="snap-start flex-shrink-0 min-w-[78%] sm:min-w-[280px] aspect-[3/4]"
+          >
+            <DailyFlashcard pick={p} index={i} />
+          </div>
         ))}
       </div>
       {picks.length > 1 && (
@@ -368,20 +478,65 @@ function AutoScrollCarousel({ picks }: { picks: SearchCandidate[] }) {
           ))}
         </div>
       )}
+      <p className="text-[10px] uppercase tracking-widest text-outline text-center mt-3">
+        Touche une carte pour la retourner
+      </p>
     </div>
   );
 }
 
-function DailyCard({ pick }: { pick: SearchCandidate }) {
+function DailyFlashcard({
+  pick,
+  index,
+}: {
+  pick: SearchCandidate;
+  index: number;
+}) {
+  const [flipped, setFlipped] = useState(false);
+  const { addToWishlist, isWishlisted } = useStore();
+
+  const wishlistKey = `daily::${pick.brand}::${pick.name}`
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+  const liked = isWishlisted(wishlistKey) === "liked";
+
+  function like(e: React.MouseEvent) {
+    e.stopPropagation();
+    addToWishlist(wishlistKey, "liked", "manual", {
+      name: pick.name,
+      brand: pick.brand,
+      imageUrl: pick.image_url ?? null,
+    });
+  }
+
+  return (
+    <div
+      className="flashcard-surface w-full h-full reveal-pop"
+      style={{ animationDelay: `${index * 110}ms` }}
+    >
+      <div
+        className={clsx(
+          "flashcard-inner shadow-xl cursor-pointer",
+          flipped && "is-flipped",
+        )}
+        onClick={() => setFlipped((f) => !f)}
+      >
+        <div className="flashcard-face">
+          <DailyFlashcardFront pick={pick} />
+        </div>
+        <div className="flashcard-face flashcard-face--back">
+          <DailyFlashcardBack pick={pick} liked={liked} onLike={like} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DailyFlashcardFront({ pick }: { pick: SearchCandidate }) {
   const [imgFailed, setImgFailed] = useState(false);
   const showImage = pick.image_url && !imgFailed;
   return (
-    <a
-      href={pick.source_url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="snap-start flex-shrink-0 min-w-[78%] sm:min-w-[260px] aspect-[3/4] relative overflow-hidden border border-outline-variant bg-surface-container-low active:scale-[0.99] transition-transform"
-    >
+    <div className="relative w-full h-full overflow-hidden border border-outline-variant bg-surface-container-low">
       {showImage ? (
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
@@ -395,24 +550,103 @@ function DailyCard({ pick }: { pick: SearchCandidate }) {
           <Icon name="local_florist" size={42} className="text-outline" />
         </div>
       )}
-      <div className="absolute inset-0 bg-gradient-to-t from-on-background/85 via-on-background/40 to-transparent" />
+      <div className="absolute inset-0 bg-gradient-to-t from-on-background/85 via-on-background/30 to-transparent" />
+
+      <div className="absolute top-2 right-2 bg-background/90 px-2 py-1 text-[9px] uppercase tracking-widest font-mono">
+        Du jour
+      </div>
+      <div className="absolute top-2 left-2 bg-background/90 px-2 py-1 text-[9px] uppercase tracking-widest font-mono flex items-center gap-1">
+        <Icon name="touch_app" size={10} />
+        Tap
+      </div>
+
       <div className="absolute inset-x-0 bottom-0 p-4 text-background">
         <p className="text-[10px] uppercase tracking-[0.25em] opacity-80">
           {pick.brand}
           {pick.family ? ` · ${pick.family}` : ""}
         </p>
-        <p className="text-lg font-semibold tracking-tight leading-tight mt-0.5">
+        <p className="text-xl font-semibold tracking-tight leading-tight mt-0.5">
           {pick.name}
         </p>
-        {pick.notes_brief && (
-          <p className="text-[11px] opacity-80 mt-1.5 leading-snug line-clamp-2">
-            {pick.notes_brief}
+      </div>
+    </div>
+  );
+}
+
+function DailyFlashcardBack({
+  pick,
+  liked,
+  onLike,
+}: {
+  pick: SearchCandidate;
+  liked: boolean;
+  onLike: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <div className="relative w-full h-full overflow-hidden border border-primary bg-background p-5 flex flex-col">
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.3em] text-outline">
+            {pick.brand}
           </p>
-        )}
+          <p className="text-base font-bold tracking-tight leading-tight mt-0.5">
+            {pick.name}
+          </p>
+        </div>
+        <span className="text-[9px] uppercase tracking-widest font-mono px-2 py-1 bg-primary text-on-primary">
+          Verso
+        </span>
       </div>
-      <div className="absolute top-2 right-2 bg-background/90 px-2 py-1 text-[9px] uppercase tracking-widest font-mono">
-        Du jour
+
+      {pick.family && (
+        <div className="mb-3">
+          <p className="text-[9px] uppercase tracking-widest text-outline mb-1">
+            Famille
+          </p>
+          <p className="text-xs font-bold uppercase tracking-widest">
+            {pick.family}
+          </p>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <p className="text-[9px] uppercase tracking-widest text-outline mb-1">
+          Notes
+        </p>
+        <p className="text-[12px] text-on-background leading-relaxed">
+          {pick.notes_brief || "Notes non précisées par la source."}
+        </p>
       </div>
-    </a>
+
+      <div className="flex items-center gap-2 mt-3">
+        <button
+          type="button"
+          onClick={onLike}
+          className={clsx(
+            "flex-1 py-2.5 rounded-full text-[10px] uppercase tracking-widest font-bold flex items-center justify-center gap-1.5 active:scale-95 transition-transform",
+            liked
+              ? "bg-primary text-on-primary"
+              : "border border-outline-variant hover:border-primary",
+          )}
+        >
+          <Icon
+            name={liked ? "favorite" : "favorite_border"}
+            filled={liked}
+            size={14}
+          />
+          {liked ? "Aimé" : "Wishlist"}
+        </button>
+        <a
+          href={pick.source_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          aria-label="Voir la fiche"
+          className="w-10 h-10 rounded-full border border-outline-variant flex items-center justify-center hover:border-primary transition-colors"
+        >
+          <Icon name="open_in_new" size={14} />
+        </a>
+      </div>
+    </div>
   );
 }

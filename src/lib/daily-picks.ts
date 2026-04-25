@@ -21,9 +21,12 @@ type CachedPicks = {
   date: string;
   query: string;
   picks: SearchCandidate[];
+  /** True after the user has tapped the La Niche envelope and revealed the
+   *  3 flashcards. Persisted so revisits skip the reveal animation. */
+  revealed: boolean;
 };
 
-const STORAGE_PREFIX = "la-niche.daily-picks.v1";
+const STORAGE_PREFIX = "la-niche.daily-picks.v2";
 
 function todayKey(): string {
   const d = new Date();
@@ -114,22 +117,37 @@ function buildDailyQuery(profile: OlfactiveProfile | null): string {
 }
 
 export type DailyPicksState =
-  | { status: "loading"; picks: SearchCandidate[] }
-  | { status: "ready"; picks: SearchCandidate[] }
-  | { status: "error"; picks: SearchCandidate[]; error: string };
+  | { status: "loading"; picks: SearchCandidate[]; revealed: boolean }
+  | { status: "ready"; picks: SearchCandidate[]; revealed: boolean }
+  | {
+      status: "error";
+      picks: SearchCandidate[];
+      revealed: boolean;
+      error: string;
+    };
 
-/** React hook — returns up to 3 daily picks for the user, cached for the day. */
+export type DailyPicksHook = {
+  state: DailyPicksState;
+  /** Mark today's picks as revealed (persists across reloads). */
+  reveal: () => void;
+};
+
+/** React hook — returns up to 3 daily picks for the user, cached for the day,
+ *  plus a `reveal()` action so the home page can flip the surprise card open. */
 export function useDailyPicks(
   profile: OlfactiveProfile | null,
   userId: string | null,
-): DailyPicksState {
+): DailyPicksHook {
   const [state, setState] = useState<DailyPicksState>({
     status: "loading",
     picks: [],
+    revealed: false,
   });
   // Only fetch once per (user, day) — `lastFetchKey` guards against rapid
   // re-fetches when the profile object identity flips.
   const lastFetchKey = useRef<string | null>(null);
+  const userIdRef = useRef<string | null>(userId);
+  userIdRef.current = userId;
 
   useEffect(() => {
     const today = todayKey();
@@ -140,24 +158,29 @@ export function useDailyPicks(
 
     const cached = readCache(userId);
     if (cached && cached.date === today && cached.query === query) {
-      setState({ status: "ready", picks: cached.picks.slice(0, 3) });
+      setState({
+        status: "ready",
+        picks: cached.picks.slice(0, 3),
+        revealed: cached.revealed,
+      });
       return;
     }
 
-    setState({ status: "loading", picks: [] });
+    setState({ status: "loading", picks: [], revealed: false });
     let cancelled = false;
     (async () => {
       try {
         const all = await agentSearch(query);
         const picks = all.slice(0, 3);
         if (cancelled) return;
-        writeCache(userId, { date: today, query, picks });
-        setState({ status: "ready", picks });
+        writeCache(userId, { date: today, query, picks, revealed: false });
+        setState({ status: "ready", picks, revealed: false });
       } catch (e: unknown) {
         if (cancelled) return;
         setState({
           status: "error",
           picks: [],
+          revealed: false,
           error: e instanceof Error ? e.message : "daily picks failed",
         });
       }
@@ -167,5 +190,13 @@ export function useDailyPicks(
     };
   }, [profile, userId]);
 
-  return state;
+  function reveal() {
+    setState((s) => ({ ...s, revealed: true }));
+    const cached = readCache(userIdRef.current);
+    if (cached) {
+      writeCache(userIdRef.current, { ...cached, revealed: true });
+    }
+  }
+
+  return { state, reveal };
 }

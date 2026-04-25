@@ -282,6 +282,27 @@ a {
 .swipe-exit-left { animation: swipe-exit-left 0.38s cubic-bezier(0.4, 0, 1, 1) forwards; }
 .swipe-exit-right { animation: swipe-exit-right 0.38s cubic-bezier(0.4, 0, 1, 1) forwards; }
 
+/* Daily picks reveal — envelope opens, then 3 flashcards pop in stagger. */
+@keyframes envelope-open {
+  0%   { opacity: 1; transform: scale(1) translateY(0); }
+  60%  { opacity: 1; transform: scale(1.06) translateY(-6px); }
+  100% { opacity: 0; transform: scale(0.85) translateY(20px); }
+}
+.envelope-open { animation: envelope-open 0.52s cubic-bezier(0.5, 0, 0.5, 1) forwards; }
+
+@keyframes reveal-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.reveal-fade-in { animation: reveal-fade-in 0.45s ease-out both; }
+
+@keyframes reveal-pop {
+  0%   { opacity: 0; transform: translateY(18px) scale(0.92) rotate(-2deg); }
+  60%  { opacity: 1; transform: translateY(-4px) scale(1.02) rotate(0.5deg); }
+  100% { opacity: 1; transform: translateY(0) scale(1) rotate(0); }
+}
+.reveal-pop { animation: reveal-pop 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
 /* Balade archive celebration */
 @keyframes celebration-rise {
   from { opacity: 0; transform: translateY(20px) scale(0.94); }
@@ -309,7 +330,10 @@ a {
   .swipe-exit-right,
   .report-section,
   .report-panel,
-  .quiz-in {
+  .quiz-in,
+  .envelope-open,
+  .reveal-fade-in,
+  .reveal-pop {
     animation: none;
     opacity: 1;
   }
