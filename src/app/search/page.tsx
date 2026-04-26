@@ -5,7 +5,6 @@ import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
-import { CreateCardButton } from "@/components/CreateCardButton";
 import { agentSearch } from "@/lib/agent-client";
 import type { SearchCandidate } from "@/lib/agent";
 import { fragranceKey, useFragrances } from "@/lib/data";
@@ -229,12 +228,6 @@ function SearchResult({ candidate }: { candidate: SearchCandidate }) {
           )}
 
           <div className="mt-2 flex items-center gap-3 flex-wrap">
-            <CreateCardButton
-              brand={candidate.brand}
-              name={candidate.name}
-              card={candidate.card}
-              variant="chip"
-            />
             <button
               type="button"
               onClick={like}

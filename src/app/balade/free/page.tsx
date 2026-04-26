@@ -7,7 +7,6 @@ import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
-import { CreateCardButton } from "@/components/CreateCardButton";
 import {
   BodySilhouette,
   fragranceInitials,
@@ -970,13 +969,6 @@ function QuestionScreen({
                     )}
                   </div>
                 </button>
-                <CreateCardButton
-                  brand={c.brand}
-                  name={c.name}
-                  card={c.card}
-                  variant="icon"
-                  className="flex-shrink-0"
-                />
               </div>
             ))}
           </div>
@@ -1458,12 +1450,6 @@ function ScanPanel({
                     {result.name}
                   </p>
                 </div>
-                <CreateCardButton
-                  brand={result.brand}
-                  name={result.name}
-                  variant="icon"
-                  className="flex-shrink-0"
-                />
               </div>
               {identified.notes_brief && (
                 <p className="text-[10px] text-on-surface-variant mt-1 leading-snug line-clamp-2">

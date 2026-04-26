@@ -794,7 +794,6 @@ function ScanConfirmStep({
           name={result.name}
           imageUrl={result.image_url ?? undefined}
           variant="card"
-          showSoonCaption={false}
           className="absolute inset-0 w-full h-full border-0"
         />
         <div className="absolute top-3 right-3">

@@ -7,7 +7,6 @@ import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
-import { CreateCardButton } from "@/components/CreateCardButton";
 import { useAuth } from "@/lib/auth";
 import { findBoutiqueById } from "@/lib/boutiques";
 import { useStore, TIER_LABELS, type SubscriptionTier } from "@/lib/store";
@@ -1030,11 +1029,6 @@ function DoneView({
                     {c.family} · {c.match_score}% match
                   </p>
                 </div>
-                <CreateCardButton
-                  brand={c.brand}
-                  name={c.name}
-                  variant="icon"
-                />
               </li>
             ))}
           </ul>
@@ -1369,13 +1363,8 @@ function SwipeCardBack({ card }: { card: RecommendationCandidate }) {
         )}
       </div>
 
-      {/* Footer — match strip + La Niche card CTA */}
-      <div className="px-5 py-4 border-t border-outline-variant/50 flex items-center justify-between gap-2">
-        <CreateCardButton
-          brand={card.brand}
-          name={card.name}
-          variant="chip"
-        />
+      {/* Footer — match strip */}
+      <div className="px-5 py-4 border-t border-outline-variant/50 flex items-center justify-end gap-2">
         <div className="flex items-center gap-2">
           <span className="text-[9px] font-mono font-bold text-outline tracking-widest">
             {card.match_score}% MATCH

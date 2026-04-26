@@ -5,7 +5,6 @@ import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
-import { CreateCardButton } from "@/components/CreateCardButton";
 import { useFragrances, type Fragrance } from "@/lib/data";
 import { useStore } from "@/lib/store";
 import { agentIdentify } from "@/lib/agent-client";
@@ -402,7 +401,6 @@ function ScanResult({
           name={displayName}
           imageUrl={displayImage ?? undefined}
           variant="card"
-          showSoonCaption={false}
           className="absolute inset-0 w-full h-full border-0"
         />
         <div className="absolute top-3 left-3">
@@ -502,7 +500,6 @@ function ScanResult({
       )}
 
       <div className="flex flex-col gap-2">
-        <CreateCardButtonWide brand={displayBrand} name={displayName} />
         {identified.kind === "matched" ? (
           <Link
             href={`/fragrance/${identified.fragrance.key}`}
@@ -557,23 +554,3 @@ function Dot({ delay }: { delay: number }) {
   );
 }
 
-/* Wide pill version of the CreateCardButton — sits flush with the other
- * full-width result actions on the scan result screen. */
-function CreateCardButtonWide({
-  brand,
-  name,
-}: {
-  brand: string;
-  name: string;
-}) {
-  return (
-    <div className="w-full">
-      <CreateCardButton
-        brand={brand}
-        name={name}
-        variant="chip"
-        className="w-full py-4 rounded-full justify-center text-xs tracking-[0.2em]"
-      />
-    </div>
-  );
-}
