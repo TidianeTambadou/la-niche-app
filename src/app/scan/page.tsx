@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
-import { useFragrances, type Fragrance } from "@/lib/data";
+import { fragranceKey, useFragrances, type Fragrance } from "@/lib/data";
 import { useStore } from "@/lib/store";
 import { agentIdentify } from "@/lib/agent-client";
 import type { IdentifyResult } from "@/lib/agent";
@@ -138,12 +138,26 @@ export default function ScanPage() {
   }
 
   function recordFeedback(liked: boolean) {
-    if (identified?.kind !== "matched") return;
-    addToWishlist(
-      identified.fragrance.key,
-      liked ? "liked" : "disliked",
-      "scan",
-    );
+    if (!identified) return;
+    if (identified.kind === "matched") {
+      // Parfum dans notre catalogue boutique → key canonique, pas besoin de
+      // fragranceMeta (la wishlist va le résoudre via useFragrances).
+      addToWishlist(
+        identified.fragrance.key,
+        liked ? "liked" : "disliked",
+        "scan",
+      );
+      return;
+    }
+    // External : préfixe ext:: + snapshot brand/name/image pour que la
+    // wishlist puisse rendre la fiche même sans entrée catalog.
+    const { agent } = identified;
+    const extKey = `ext::${fragranceKey(agent.brand, agent.name)}`;
+    addToWishlist(extKey, liked ? "liked" : "disliked", "scan", {
+      name: agent.name,
+      brand: agent.brand,
+      imageUrl: agent.image_url ?? null,
+    });
   }
 
   function reset() {
@@ -444,57 +458,54 @@ function ScanResult({
         )}
       </div>
 
-      {identified.kind === "matched" ? (
-        !given ? (
-          <div className="border-y border-outline-variant py-6 flex flex-col gap-4">
-            <p className="text-center text-sm font-medium">
-              Tu aimes ce parfum ?
+      {!given ? (
+        <div className="border-y border-outline-variant py-6 flex flex-col gap-4">
+          <p className="text-center text-sm font-medium">
+            Tu aimes ce parfum ?
+          </p>
+          {identified.kind === "external" && (
+            <p className="text-[11px] text-outline text-center max-w-xs mx-auto leading-relaxed">
+              Hors catalogue partenaire — il sera quand même ajouté à ta wishlist
+              pour t&apos;en souvenir.
             </p>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  onDislike();
-                  setGiven("disliked");
-                }}
-                className="py-4 border border-outline-variant rounded-full text-xs uppercase tracking-widest font-bold hover:border-error hover:text-error active:scale-95 transition-all flex items-center justify-center gap-2"
-              >
-                <Icon name="thumb_down" size={16} />
-                Non
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  onLike();
-                  setGiven("liked");
-                }}
-                className="py-4 bg-primary text-on-primary rounded-full text-xs uppercase tracking-widest font-bold active:scale-95 transition-all flex items-center justify-center gap-2"
-              >
-                <Icon name="thumb_up" size={16} />
-                Oui
-              </button>
-            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                onDislike();
+                setGiven("disliked");
+              }}
+              className="py-4 border border-outline-variant rounded-full text-xs uppercase tracking-widest font-bold hover:border-error hover:text-error active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              <Icon name="thumb_down" size={16} />
+              Non
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onLike();
+                setGiven("liked");
+              }}
+              className="py-4 bg-primary text-on-primary rounded-full text-xs uppercase tracking-widest font-bold active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              <Icon name="thumb_up" size={16} />
+              Oui
+            </button>
           </div>
-        ) : (
-          <div className="border-y border-outline-variant py-6 text-center">
-            <Icon
-              name={given === "liked" ? "favorite" : "block"}
-              filled={given === "liked"}
-              size={28}
-              className="mx-auto mb-2"
-            />
-            <p className="text-xs uppercase tracking-widest font-bold">
-              {given === "liked"
-                ? "Ajouté à la wishlist (Liked)"
-                : "Marqué Disliked"}
-            </p>
-          </div>
-        )
+        </div>
       ) : (
         <div className="border-y border-outline-variant py-6 text-center">
-          <p className="text-xs text-on-surface-variant max-w-xs mx-auto leading-relaxed">
-            Ce parfum n&apos;est pas (encore) dans le stock des boutiques
-            référencées.
+          <Icon
+            name={given === "liked" ? "favorite" : "block"}
+            filled={given === "liked"}
+            size={28}
+            className="mx-auto mb-2"
+          />
+          <p className="text-xs uppercase tracking-widest font-bold">
+            {given === "liked"
+              ? "Ajouté à la wishlist (Liked)"
+              : "Marqué Disliked"}
           </p>
         </div>
       )}

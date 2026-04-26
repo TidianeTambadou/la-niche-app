@@ -625,25 +625,10 @@ JSON STRICT, sans markdown :
         return NextResponse.json({ ok: true, mode: "identify", result: null } satisfies AgentResponse);
       }
 
-      // Step 2a — try Fragella first (instant, real CDN image).
-      const fragella = await getFragellaPerfume(vision.brand, vision.name);
-      if (fragella) {
-        const result: IdentifyResult = {
-          name: fragella.name,
-          brand: fragella.brand,
-          confidence: vision.confidence ?? 0.85,
-          notes_brief:
-            buildBriefFromFragella(fragella) || vision.notes_brief || "",
-          source_url:
-            fragella.source_url ??
-            `https://www.fragrantica.com/search/?query=${encodeURIComponent(`${fragella.brand} ${fragella.name}`)}`,
-          ...(fragella.image_url ? { image_url: fragella.image_url } : {}),
-        };
-        return NextResponse.json({ ok: true, mode: "identify", result } satisfies AgentResponse);
-      }
-
-      // Step 2b — Fragella didn't have it: fall back to the agentic loop
-      // that scrapes Fragrantica HTML for pyramid + image_url.
+      // Scan = agent Fragrantica direct (sans passer par Fragella). L'agent
+      // scrape le HTML brut depuis Tavily et extrait pyramide + image_url —
+      // plus fiable sur les noms confidentiels que la lookup Fragella, qui
+      // confondait parfois les variantes (Aventus / Aventus Cologne / etc.).
       const enriched: PerfumeJson = await runFragranticaAgent({
         query: `${vision.brand} ${vision.name}`,
       });
