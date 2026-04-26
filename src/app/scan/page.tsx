@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
+import { CreateCardButton } from "@/components/CreateCardButton";
 import { useFragrances, type Fragrance } from "@/lib/data";
 import { useStore } from "@/lib/store";
 import { agentIdentify } from "@/lib/agent-client";
@@ -192,7 +193,7 @@ export default function ScanPage() {
           </button>
           <p className="text-[10px] uppercase tracking-widest text-outline text-center leading-relaxed">
             L&apos;image capturée est envoyée à l&apos;équipe La Niche pour
-            identification (Fragrantica).
+            identification.
           </p>
         </section>
       )}
@@ -439,8 +440,8 @@ function ScanResult({
         )}
         {lowConfidence && (
           <p className="text-[11px] text-error mt-3 border border-error/40 px-3 py-2">
-            Confiance faible — vérifie sur Fragrantica avant de te fier au
-            résultat.
+            Confiance faible — n&apos;hésite pas à demander à la
+            conciergerie pour confirmer.
           </p>
         )}
       </div>
@@ -501,6 +502,7 @@ function ScanResult({
       )}
 
       <div className="flex flex-col gap-2">
+        <CreateCardButtonWide brand={displayBrand} name={displayName} />
         {identified.kind === "matched" ? (
           <Link
             href={`/fragrance/${identified.fragrance.key}`}
@@ -516,7 +518,7 @@ function ScanResult({
             className="w-full py-4 border border-outline-variant rounded-full text-xs uppercase tracking-[0.2em] font-bold hover:border-primary text-center active:scale-95 transition-all flex items-center justify-center gap-2"
           >
             <Icon name="open_in_new" size={14} />
-            Voir sur Fragrantica
+            Voir la fiche source
           </a>
         )}
         <button
@@ -552,5 +554,26 @@ function Dot({ delay }: { delay: number }) {
       className="w-2 h-2 bg-on-primary rounded-full animate-pulse"
       style={{ animationDelay: `${delay}ms` }}
     />
+  );
+}
+
+/* Wide pill version of the CreateCardButton — sits flush with the other
+ * full-width result actions on the scan result screen. */
+function CreateCardButtonWide({
+  brand,
+  name,
+}: {
+  brand: string;
+  name: string;
+}) {
+  return (
+    <div className="w-full">
+      <CreateCardButton
+        brand={brand}
+        name={name}
+        variant="chip"
+        className="w-full py-4 rounded-full justify-center text-xs tracking-[0.2em]"
+      />
+    </div>
   );
 }

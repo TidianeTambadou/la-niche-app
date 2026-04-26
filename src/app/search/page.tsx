@@ -5,10 +5,12 @@ import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
+import { CreateCardButton } from "@/components/CreateCardButton";
 import { agentSearch } from "@/lib/agent-client";
 import type { SearchCandidate } from "@/lib/agent";
 import { fragranceKey, useFragrances } from "@/lib/data";
 import { useStore } from "@/lib/store";
+import { openConcierge } from "@/lib/concierge-bus";
 
 const SUGGESTIONS = [
   "Aventus",
@@ -113,9 +115,7 @@ export default function SearchPage() {
       )}
 
       {!loading && !error && hasQuery && results.length === 0 && (
-        <p className="text-sm text-on-surface-variant mt-8 italic">
-          Aucun résultat pour «&nbsp;{query}&nbsp;».
-        </p>
+        <ConciergeFallback query={query} />
       )}
 
       {results.length > 0 && (
@@ -226,6 +226,12 @@ function SearchResult({ candidate }: { candidate: SearchCandidate }) {
           )}
 
           <div className="mt-2 flex items-center gap-3 flex-wrap">
+            <CreateCardButton
+              brand={candidate.brand}
+              name={candidate.name}
+              card={candidate.card}
+              variant="chip"
+            />
             <button
               type="button"
               onClick={like}
@@ -266,5 +272,49 @@ function SearchResult({ candidate }: { candidate: SearchCandidate }) {
         </div>
       </div>
     </li>
+  );
+}
+
+/* ─── Concierge fallback ─────────────────────────────────────────────────
+ * Shown when the fast lookup returned no match. Pre-fills a question for
+ * the ConciergeWidget; the concierge will run the deep search across our
+ * referenced sources in the background. The user never sees those source
+ * names — only "l'équipe La Niche cherche".
+ * ---------------------------------------------------------------------- */
+
+function ConciergeFallback({ query }: { query: string }) {
+  function ask() {
+    openConcierge({
+      message: `Trouve-moi le parfum « ${query} ». Je ne le vois pas dans la base.`,
+    });
+  }
+  return (
+    <section className="mt-10 border border-outline-variant bg-surface-container-low p-6 text-center flex flex-col items-center gap-4">
+      <div className="w-12 h-12 rounded-full overflow-hidden bg-background border border-outline-variant flex items-center justify-center">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/logo-laniche.png"
+          alt=""
+          className="w-full h-full object-cover"
+        />
+      </div>
+      <div>
+        <p className="text-sm font-semibold tracking-tight">
+          Pas de résultat pour «&nbsp;{query}&nbsp;».
+        </p>
+        <p className="text-xs text-on-surface-variant mt-1.5 max-w-xs leading-relaxed">
+          Demande à la conciergerie La Niche, on cherche pour toi et on te
+          revient avec les notes, la pyramide et un avis honnête.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={ask}
+        className="px-5 py-2.5 bg-primary text-on-primary rounded-full text-[10px] uppercase tracking-widest font-bold active:scale-95 transition-transform flex items-center gap-2"
+      >
+        <Icon name="forum" size={14} />
+        Demander à la conciergerie
+      </button>
+    </section>
   );
 }

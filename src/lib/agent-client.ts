@@ -8,6 +8,7 @@ import type {
   FriendReport,
   IdentifyResult,
   OlfactiveDNA,
+  PerfumeCardData,
   RecommendationCandidate,
   SearchCandidate,
 } from "@/lib/agent";
@@ -235,4 +236,45 @@ export async function agentAsk(
     throw new Error(msg);
   }
   throw new Error("Réponse invalide");
+}
+
+/* -------------------------------------------------------------------------
+ * agentCard — on-demand rich perfume sheet for the "Carte signée La Niche"
+ * modal. Returns `null` when neither Fragella nor the fallback know the
+ * perfume — UI then falls back to a "demande à la conciergerie" CTA.
+ * --------------------------------------------------------------------- */
+
+const CARD_CACHE = new Map<string, { ts: number; value: PerfumeCardData | null }>();
+const CARD_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function cardCacheKey(brand: string, name: string): string {
+  return `${brand.toLowerCase().trim()}::${name.toLowerCase().trim()}`;
+}
+
+export async function agentCard(
+  brand: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<PerfumeCardData | null> {
+  const key = cardCacheKey(brand, name);
+  const hit = CARD_CACHE.get(key);
+  if (hit && Date.now() - hit.ts < CARD_CACHE_TTL_MS) return hit.value;
+
+  const res = await call(
+    { mode: "card", payload: { brand, name } },
+    signal,
+  );
+  if (res.ok && res.mode === "card") {
+    CARD_CACHE.set(key, { ts: Date.now(), value: res.perfume });
+    return res.perfume;
+  }
+  if (!res.ok) {
+    // Treat unknown / disabled / upstream errors as "no card" — the UI
+    // falls back to the concierge CTA gracefully.
+    if (res.error === "agent_disabled" || res.error === "upstream_error") {
+      return null;
+    }
+    throw new Error(`${res.error}${res.detail ? ` — ${res.detail}` : ""}`);
+  }
+  return null;
 }

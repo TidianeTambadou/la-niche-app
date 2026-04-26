@@ -12,6 +12,7 @@ import {
   type FriendReport,
   type IdentifyResult,
   type OlfactiveDNA,
+  type PerfumeCardData,
   type RecommendationCandidate,
   type SearchCandidate,
 } from "@/lib/agent";
@@ -25,6 +26,11 @@ import {
   runFragranticaAgent,
   type PerfumeJson,
 } from "@/lib/fragrantica-agent";
+import {
+  getFragellaPerfume,
+  searchFragella,
+  type FragellaPerfume,
+} from "@/lib/fragella";
 
 /* ─── In-memory search cache (per Vercel instance) ─────────────────────── */
 
@@ -119,6 +125,67 @@ function isValidPerfumeImageUrl(url: unknown): url is string {
   } catch {
     return false;
   }
+}
+
+/** Build a short ≤50 char `notes_brief` from a Fragella perfume — picks
+ *  the most distinctive notes per layer and trims. */
+function buildBriefFromFragella(p: FragellaPerfume): string {
+  const accordNames = p.accords.map((a) => a.name);
+  const all = [...p.notes.top, ...p.notes.middle, ...p.notes.base, ...accordNames];
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const v of all) {
+    const k = v.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    unique.push(v);
+    if (unique.length >= 5) break;
+  }
+  const joined = unique.join(", ");
+  return joined.length <= 50 ? joined : joined.slice(0, 47) + "…";
+}
+
+/** Public PerfumeCardData payload — what the "Carte signée La Niche" modal
+ *  consumes. Same shape as FragellaPerfume but typed in the shared agent
+ *  module so it can travel over the wire. */
+function fragellaToCardData(p: FragellaPerfume): PerfumeCardData {
+  return {
+    name: p.name,
+    brand: p.brand,
+    image_url: p.image_url,
+    description: p.description,
+    gender: p.gender,
+    family: p.family,
+    notes: { ...p.notes },
+    accords: p.accords.map((a) => ({
+      name: a.name,
+      ...(a.weight !== undefined ? { weight: a.weight } : {}),
+    })),
+    longevity: p.longevity,
+    sillage: p.sillage,
+    seasons: p.seasons,
+    day_time: p.day_time,
+    rating: p.rating,
+    reviews_count: p.reviews_count,
+    source_url: p.source_url,
+  };
+}
+
+/** Map a Fragella perfume into the SearchCandidate shape the front-end
+ *  expects. Embeds the full `card` payload so the "Carte signée La Niche"
+ *  modal can open instantly without a second fetch. */
+function fragellaToSearchCandidate(p: FragellaPerfume): SearchCandidate {
+  return {
+    name: p.name,
+    brand: p.brand,
+    notes_brief: buildBriefFromFragella(p),
+    family: p.family ?? undefined,
+    image_url: p.image_url ?? undefined,
+    source_url:
+      p.source_url ??
+      `https://www.fragrantica.com/search/?query=${encodeURIComponent(`${p.brand} ${p.name}`)}`,
+    card: fragellaToCardData(p),
+  };
 }
 
 /** Flatten the agent's pyramid + accords into a short ≤80 char human string
@@ -352,6 +419,29 @@ export async function POST(req: Request) {
     const cached = cachedSearch(cacheKey);
     if (cached) return NextResponse.json({ ok: true, mode: "search", candidates: cached } satisfies AgentResponse);
 
+    // PRIMARY — Fragella (single round trip, no LLM, real images).
+    try {
+      const fragellaHits = await searchFragella(query, 5);
+      if (fragellaHits && fragellaHits.length > 0) {
+        const candidates = fragellaHits.map(fragellaToSearchCandidate);
+        rememberSearch(cacheKey, candidates);
+        return NextResponse.json({ ok: true, mode: "search", candidates } satisfies AgentResponse);
+      }
+      // Empty / unreachable → return empty list. The front-end shows the
+      // "demande à la conciergerie" CTA when candidates.length === 0, which
+      // routes the user to the ConciergeWidget (Tavily + Fragrantica scrape).
+      const emptyCandidates: SearchCandidate[] = [];
+      rememberSearch(cacheKey, emptyCandidates);
+      return NextResponse.json({
+        ok: true,
+        mode: "search",
+        candidates: emptyCandidates,
+      } satisfies AgentResponse);
+    } catch (e) {
+      console.error("[search] Fragella threw:", e);
+      // Fall through to the legacy Tavily pipeline below.
+    }
+
     try {
       // Tavily with raw_content → we get the actual Fragrantica HTML, which
       // contains the real fimgs.net bottle image URLs. The LLM is asked to
@@ -480,9 +570,25 @@ JSON STRICT, sans markdown :
         return NextResponse.json({ ok: true, mode: "identify", result: null } satisfies AgentResponse);
       }
 
-      // Step 2 — full Fragrantica agentic loop. The agent makes its own
-      // Tavily tool calls (up to 4 iterations) until it can extract real
-      // pyramid + image_url from the perfume's fragrantica.fr page.
+      // Step 2a — try Fragella first (instant, real CDN image).
+      const fragella = await getFragellaPerfume(vision.brand, vision.name);
+      if (fragella) {
+        const result: IdentifyResult = {
+          name: fragella.name,
+          brand: fragella.brand,
+          confidence: vision.confidence ?? 0.85,
+          notes_brief:
+            buildBriefFromFragella(fragella) || vision.notes_brief || "",
+          source_url:
+            fragella.source_url ??
+            `https://www.fragrantica.com/search/?query=${encodeURIComponent(`${fragella.brand} ${fragella.name}`)}`,
+          ...(fragella.image_url ? { image_url: fragella.image_url } : {}),
+        };
+        return NextResponse.json({ ok: true, mode: "identify", result } satisfies AgentResponse);
+      }
+
+      // Step 2b — Fragella didn't have it: fall back to the agentic loop
+      // that scrapes Fragrantica HTML for pyramid + image_url.
       const enriched: PerfumeJson = await runFragranticaAgent({
         query: `${vision.brand} ${vision.name}`,
       });
@@ -850,6 +956,39 @@ Rédige le rapport JSON pour le vendeur.`,
         } satisfies AgentResponse,
         { status: 502 },
       );
+    }
+  }
+
+  /* ── CARD (rich perfume sheet for the "Carte signée La Niche" modal) ──
+   * On-demand lookup used when a SearchCandidate doesn't already carry the
+   * rich `card` payload (e.g. came from the legacy Tavily fallback or a
+   * local catalog entry). Pure Fragella, no LLM. */
+  if (body.mode === "card") {
+    const { brand, name } = body.payload ?? { brand: "", name: "" };
+    const trimmedBrand = brand.trim();
+    const trimmedName = name.trim();
+    if (!trimmedBrand || !trimmedName) {
+      return NextResponse.json({
+        ok: false,
+        error: "missing_perfume",
+      } satisfies AgentResponse, { status: 400 });
+    }
+    try {
+      const fragella = await getFragellaPerfume(trimmedBrand, trimmedName);
+      const perfume: PerfumeCardData | null = fragella
+        ? fragellaToCardData(fragella)
+        : null;
+      return NextResponse.json({
+        ok: true,
+        mode: "card",
+        perfume,
+      } satisfies AgentResponse);
+    } catch (e) {
+      return NextResponse.json({
+        ok: false,
+        error: "upstream_error",
+        detail: e instanceof Error ? e.message : String(e),
+      } satisfies AgentResponse, { status: 502 });
     }
   }
 

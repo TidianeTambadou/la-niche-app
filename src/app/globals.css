@@ -282,6 +282,31 @@ a {
 .swipe-exit-left { animation: swipe-exit-left 0.38s cubic-bezier(0.4, 0, 1, 1) forwards; }
 .swipe-exit-right { animation: swipe-exit-right 0.38s cubic-bezier(0.4, 0, 1, 1) forwards; }
 
+/* Carte signée La Niche — modal section stagger + accord bar springy fill. */
+@keyframes card-section-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.card-section { animation: card-section-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.perfume-card-sheet .card-section:nth-child(1) { animation-delay: 80ms; }
+.perfume-card-sheet .card-section:nth-child(2) { animation-delay: 160ms; }
+.perfume-card-sheet .card-section:nth-child(3) { animation-delay: 240ms; }
+.perfume-card-sheet .card-section:nth-child(4) { animation-delay: 320ms; }
+.perfume-card-sheet .card-section:nth-child(5) { animation-delay: 400ms; }
+.perfume-card-sheet .card-section:nth-child(6) { animation-delay: 480ms; }
+.perfume-card-sheet .card-section:nth-child(7) { animation-delay: 560ms; }
+
+/* Accord bar growing in width — width animation isn't directly animatable
+ * via keyframes (no `from` for width:auto), so we use a clip-path reveal
+ * that gives a similar spring feel without layout reflows. */
+@keyframes accord-bar-fill {
+  from { clip-path: inset(0 100% 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
+}
+.accord-bar-anim > div {
+  animation: accord-bar-fill 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 /* Daily picks reveal — envelope opens, then 3 flashcards pop in stagger. */
 @keyframes envelope-open {
   0%   { opacity: 1; transform: scale(1) translateY(0); }
@@ -386,9 +411,12 @@ a {
   .quiz-in,
   .envelope-open,
   .reveal-fade-in,
-  .reveal-pop {
+  .reveal-pop,
+  .card-section,
+  .accord-bar-anim > div {
     animation: none;
     opacity: 1;
+    clip-path: none;
   }
   .shimmer-bar {
     background: var(--surface-container-low);

@@ -6,6 +6,7 @@ import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { agentAsk, type AskHistoryTurn } from "@/lib/agent-client";
 import { useAuth } from "@/lib/auth";
+import { onOpenConcierge } from "@/lib/concierge-bus";
 import {
   readProfileFromUser,
   FAMILY_VULGAR,
@@ -91,6 +92,25 @@ export function ConciergeWidget() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
+
+  // Listen for global "open concierge" requests fired from anywhere in the
+  // app — typically the search page when Fragella has no result and offers
+  // a "demande à la conciergerie" CTA pre-filled with the user's query.
+  useEffect(() => {
+    return onOpenConcierge((detail) => {
+      setOpen(true);
+      if (detail.message) {
+        setInput(detail.message);
+        if (detail.autosend) {
+          // Defer until after open animation so the message lands in chat.
+          window.setTimeout(() => void send(detail.message), 320);
+        }
+      }
+    });
+    // `send` is stable across renders for this purpose — including it would
+    // re-subscribe on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function nextId(): number {
     idCounter.current += 1;
@@ -305,7 +325,7 @@ function EmptyState({ onPick }: { onPick: (s: string) => void }) {
           Pose une question sur un parfum, des notes, une comparaison, ou
           demande une recommandation. Sources :{" "}
           <span className="font-mono text-[10px]">
-            fragrantica · basenotes · parfumo · nstperfume · fragrancex
+            base de connaissances La Niche
           </span>
           .
         </p>
@@ -501,8 +521,8 @@ function renderInline(text: string): ReactNode {
  * --------------------------------------------------------------------- */
 
 const LOADING_STEPS = [
-  "Consulte fragrantica.com",
-  "Vérifie sur basenotes",
+  "L'équipe La Niche cherche…",
+  "On feuillette nos archives",
   "Croise les avis utilisateurs",
   "Compare les notes olfactives",
   "Synthèse en cours",

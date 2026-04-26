@@ -7,6 +7,7 @@ import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
+import { CreateCardButton } from "@/components/CreateCardButton";
 import {
   BodySilhouette,
   fragranceInitials,
@@ -19,6 +20,7 @@ import { fragranceKey, useFragrances, type Fragrance } from "@/lib/data";
 import { useStore, type BodyPlacement } from "@/lib/store";
 import { agentAsk, agentIdentify, agentSearch } from "@/lib/agent-client";
 import type { IdentifyResult, SearchCandidate } from "@/lib/agent";
+import { openConcierge } from "@/lib/concierge-bus";
 
 export default function FreeBaladePage() {
   const router = useRouter();
@@ -933,40 +935,49 @@ function QuestionScreen({
               />
             )}
             {!error && candidates.length === 0 && !loading && (
-              <p className="px-4 py-3 text-xs text-outline italic">
-                Aucun résultat sur Fragrantica pour « {query} ».
-              </p>
+              <ConciergeFallbackInline query={query} />
             )}
             {candidates.map((c, i) => (
-              <button
+              <div
                 key={`${c.brand}-${c.name}-${i}`}
-                type="button"
-                onClick={() => {
-                  setQuery("");
-                  setCandidates([]);
-                  onCandidatePicked(c);
-                }}
-                className="w-full text-left px-3 py-2 hover:bg-surface-container-low border-b border-outline-variant/30 last:border-0 flex items-center gap-3"
+                className="px-3 py-2 hover:bg-surface-container-low border-b border-outline-variant/30 last:border-0 flex items-center gap-3"
               >
-                <PerfumeArtwork
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery("");
+                    setCandidates([]);
+                    onCandidatePicked(c);
+                  }}
+                  className="flex-1 text-left flex items-center gap-3 min-w-0"
+                >
+                  <PerfumeArtwork
+                    brand={c.brand}
+                    name={c.name}
+                    imageUrl={c.image_url}
+                    variant="thumb"
+                    className="w-10 h-10 flex-shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] uppercase tracking-[0.15em] text-outline">
+                      {c.brand}
+                    </p>
+                    <p className="text-sm font-medium truncate">{c.name}</p>
+                    {c.notes_brief && (
+                      <p className="text-[10px] text-on-surface-variant truncate mt-0.5">
+                        {c.notes_brief}
+                      </p>
+                    )}
+                  </div>
+                </button>
+                <CreateCardButton
                   brand={c.brand}
                   name={c.name}
-                  imageUrl={c.image_url}
-                  variant="thumb"
-                  className="w-10 h-10 flex-shrink-0"
+                  card={c.card}
+                  variant="icon"
+                  className="flex-shrink-0"
                 />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] uppercase tracking-[0.15em] text-outline">
-                    {c.brand}
-                  </p>
-                  <p className="text-sm font-medium truncate">{c.name}</p>
-                  {c.notes_brief && (
-                    <p className="text-[10px] text-on-surface-variant truncate mt-0.5">
-                      {c.notes_brief}
-                    </p>
-                  )}
-                </div>
-              </button>
+              </div>
             ))}
           </div>
         )}
@@ -1438,12 +1449,22 @@ function ScanPanel({
               className="w-16 h-20 flex-shrink-0"
             />
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] uppercase tracking-[0.15em] text-outline">
-                {result.brand}
-              </p>
-              <p className="text-sm font-semibold tracking-tight">
-                {result.name}
-              </p>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-outline">
+                    {result.brand}
+                  </p>
+                  <p className="text-sm font-semibold tracking-tight">
+                    {result.name}
+                  </p>
+                </div>
+                <CreateCardButton
+                  brand={result.brand}
+                  name={result.name}
+                  variant="icon"
+                  className="flex-shrink-0"
+                />
+              </div>
               {identified.notes_brief && (
                 <p className="text-[10px] text-on-surface-variant mt-1 leading-snug line-clamp-2">
                   {identified.notes_brief}
@@ -1517,6 +1538,40 @@ function matchToCatalog(
     if (score > 0.6 && (!best || score > best.score)) best = { f, score };
   }
   return best?.f ?? null;
+}
+
+/* Inline "ask the concierge" fallback for the autocomplete dropdown when
+ * the fast lookup returned no match. Compact, fits in the dropdown. */
+function ConciergeFallbackInline({ query }: { query: string }) {
+  function ask() {
+    openConcierge({
+      message: `Trouve-moi le parfum « ${query} ». Je le cherche pour ma balade.`,
+    });
+  }
+  return (
+    <div className="px-3 py-3 flex items-center gap-3 border-b border-outline-variant/30 last:border-0">
+      <div className="w-8 h-8 rounded-full overflow-hidden bg-background border border-outline-variant flex items-center justify-center flex-shrink-0">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/logo-laniche.png"
+          alt=""
+          className="w-full h-full object-cover"
+        />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[11px] text-on-background leading-snug">
+          Pas trouvé «&nbsp;{query}&nbsp;» dans la base.
+        </p>
+        <button
+          type="button"
+          onClick={ask}
+          className="mt-0.5 text-[10px] uppercase tracking-widest font-bold text-primary border-b border-primary pb-px"
+        >
+          Demander à la conciergerie
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Corner({

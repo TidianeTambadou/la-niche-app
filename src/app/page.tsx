@@ -6,6 +6,7 @@ import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
+import { CreateCardButton } from "@/components/CreateCardButton";
 import { NewsRail } from "@/components/NewsRail";
 import { latestNews } from "@/lib/news";
 import { useAuth } from "@/lib/auth";
@@ -659,16 +660,14 @@ function DailyFlashcardBack({
           />
           {liked ? "Aimé" : "Wishlist"}
         </button>
-        <a
-          href={pick.source_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          aria-label="Voir la fiche"
-          className="w-10 h-10 rounded-full border border-outline-variant flex items-center justify-center hover:border-primary transition-colors"
-        >
-          <Icon name="open_in_new" size={14} />
-        </a>
+        <CreateCardButton
+          brand={pick.brand}
+          name={pick.name}
+          card={pick.card}
+          variant="icon"
+          ariaLabel="Voir la carte"
+          className="w-10 h-10"
+        />
       </div>
     </div>
   );

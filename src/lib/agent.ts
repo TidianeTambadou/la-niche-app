@@ -167,6 +167,53 @@ export type SearchCandidate = {
   family?: string;
   /** Best-effort bottle image URL (may 404 — caller must handle gracefully). */
   image_url?: string;
+  /** Rich data when available — used by the "Carte signée La Niche" modal
+   *  to render the full perfume sheet without a second fetch. */
+  card?: PerfumeCardData;
+};
+
+/* -------------------------------------------------------------------------
+ * Perfume card — rich payload powering the "Carte signée La Niche" modal.
+ *
+ * Mirror of FragellaPerfume but lives in `lib/agent.ts` so it can travel
+ * over the wire and be imported by Client Components. All fields nullable
+ * because Fragella's coverage varies per perfume.
+ * --------------------------------------------------------------------- */
+
+export type PerfumeAccord = {
+  /** Accord name, e.g. "Vanilla", "Sweet", "Amber". */
+  name: string;
+  /** 0..100 — strength of the accord. `undefined` when Fragella didn't ship a
+   *  weight; the UI renders the bar at full width in that case. */
+  weight?: number;
+};
+
+export type PerfumeCardData = {
+  name: string;
+  brand: string;
+  image_url: string | null;
+  description: string | null;
+  /** "men" | "women" | "unisex" — free-form, displayed as-is. */
+  gender: string | null;
+  family: string | null;
+  notes: {
+    top: string[];
+    middle: string[];
+    base: string[];
+  };
+  accords: PerfumeAccord[];
+  /** Free-form longevity (e.g. "7h", "Long lasting", "Moderate"). */
+  longevity: string | null;
+  /** Free-form sillage (e.g. "Strong", "Moderate", "Intimate"). */
+  sillage: string | null;
+  /** Subset of ["winter","spring","summer","autumn"]. */
+  seasons: string[];
+  /** Subset of ["day","night"]. */
+  day_time: string[];
+  /** 0..5 average rating. */
+  rating: number | null;
+  reviews_count: number | null;
+  source_url: string | null;
 };
 
 export type IdentifyResult = {
@@ -242,7 +289,8 @@ export type AgentMode =
   | "identify"
   | "ask"
   | "recommend"
-  | "friend_report";
+  | "friend_report"
+  | "card";
 
 export type AgentRequest =
   | { mode: "search"; payload: { query: string } }
@@ -292,6 +340,10 @@ export type AgentRequest =
           >
         >;
       };
+    }
+  | {
+      mode: "card";
+      payload: { brand: string; name: string };
     };
 
 export type AgentResponse =
@@ -307,6 +359,7 @@ export type AgentResponse =
       dna: OlfactiveDNA;
     }
   | { ok: true; mode: "friend_report"; report: FriendReport }
+  | { ok: true; mode: "card"; perfume: PerfumeCardData | null }
   | { ok: false; error: string; detail?: string };
 
 /* -------------------------------------------------------------------------

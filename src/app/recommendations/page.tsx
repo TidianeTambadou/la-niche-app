@@ -7,6 +7,7 @@ import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
 import { ErrorBubble } from "@/components/ErrorBubble";
 import { PerfumeArtwork } from "@/components/PerfumeArtwork";
+import { CreateCardButton } from "@/components/CreateCardButton";
 import { useAuth } from "@/lib/auth";
 import { findBoutiqueById } from "@/lib/boutiques";
 import { useStore } from "@/lib/store";
@@ -522,7 +523,7 @@ export default function RecommendationsPage() {
           href={currentCard?.source_url ?? "#"}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Détails Fragrantica"
+          aria-label="Voir la fiche source"
           className="w-12 h-12 rounded-full border border-outline-variant/70 bg-background flex items-center justify-center text-outline hover:text-on-background hover:border-primary transition-all active:scale-90"
         >
           <Icon name="open_in_new" size={16} />
@@ -715,7 +716,7 @@ function ConfigureView({
       </button>
 
       <p className="text-[10px] text-outline text-center mt-4 leading-relaxed">
-        Sources Fragrantica · Basenotes · Parfumo
+        Sélection La Niche
       </p>
     </div>
   );
@@ -744,12 +745,12 @@ function LoadingView() {
       icon: "biotech",
       title: "Analyse",
       label: "Lecture de ton ADN olfactif",
-      detail: "Croisement profil + wishlist + données Fragrantica",
+      detail: "Croisement profil + wishlist + base de connaissances",
     },
     {
       icon: "travel_explore",
       title: "Recherche",
-      label: "Exploration ciblée Fragrantica",
+      label: "Exploration ciblée des archives",
       detail: "Requêtes parallèles sur tes accords clés",
     },
     {
@@ -863,7 +864,7 @@ function LoadingView() {
       </ul>
 
       <p className="text-[10px] uppercase tracking-[0.2em] text-outline text-center mt-8">
-        Sources · Fragrantica · Basenotes · Parfumo
+        Sélection signée La Niche
       </p>
     </div>
   );
@@ -1012,15 +1013,11 @@ function DoneView({
                     {c.family} · {c.match_score}% match
                   </p>
                 </div>
-                <a
-                  href={c.source_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-outline hover:text-primary transition-colors"
-                  aria-label="Détails"
-                >
-                  <Icon name="open_in_new" size={16} />
-                </a>
+                <CreateCardButton
+                  brand={c.brand}
+                  name={c.name}
+                  variant="icon"
+                />
               </li>
             ))}
           </ul>
@@ -1355,19 +1352,13 @@ function SwipeCardBack({ card }: { card: RecommendationCandidate }) {
         )}
       </div>
 
-      {/* Footer — match strip */}
-      <div className="px-5 py-4 border-t border-outline-variant/50 flex items-center justify-between">
-        <a
-          href={card.source_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          className="text-[10px] uppercase tracking-widest font-bold text-outline hover:text-primary transition-colors flex items-center gap-1 cursor-pointer"
-        >
-          <Icon name="open_in_new" size={12} />
-          Source
-        </a>
+      {/* Footer — match strip + La Niche card CTA */}
+      <div className="px-5 py-4 border-t border-outline-variant/50 flex items-center justify-between gap-2">
+        <CreateCardButton
+          brand={card.brand}
+          name={card.name}
+          variant="chip"
+        />
         <div className="flex items-center gap-2">
           <span className="text-[9px] font-mono font-bold text-outline tracking-widest">
             {card.match_score}% MATCH

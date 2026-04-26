@@ -5,6 +5,7 @@ import Link from "next/link";
 import { clsx } from "clsx";
 import { Icon } from "@/components/Icon";
 import { FragranceImage } from "@/components/FragranceImage";
+import { CreateCardButton } from "@/components/CreateCardButton";
 import { useFragrances } from "@/lib/data";
 import {
   useStore,
@@ -223,7 +224,12 @@ export default function WishlistPage() {
                     }
                   />
 
-                  <div className="mt-3 flex items-center gap-3">
+                  <div className="mt-3 flex items-center gap-3 flex-wrap">
+                    <CreateCardButton
+                      brand={brand}
+                      name={name}
+                      variant="ghost"
+                    />
                     <Link
                       href="/balade"
                       className="text-[10px] uppercase tracking-widest font-bold border-b border-primary pb-0.5"
