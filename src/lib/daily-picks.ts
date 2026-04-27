@@ -165,9 +165,12 @@ export function useDailyPicks(
   userIdRef.current = userId;
 
   useEffect(() => {
+    // Auth not resolved yet — stay in loading state until userId is known.
+    if (userId === null) return;
+
     const today = todayKey();
     const query = buildDailyQuery(profile);
-    const fetchKey = `${userId ?? "anon"}::${today}::${query}`;
+    const fetchKey = `${userId}::${today}::${query}`;
     if (lastFetchKey.current === fetchKey) return;
     lastFetchKey.current = fetchKey;
 

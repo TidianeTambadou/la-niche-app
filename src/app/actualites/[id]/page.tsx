@@ -111,7 +111,7 @@ export default async function ActualitePage({
                 Source externe
               </p>
               <p className="text-xs text-on-surface-variant truncate">
-                {new URL(item.url).hostname}
+                {(() => { try { return new URL(item.url).hostname; } catch { return item.url; } })()}
               </p>
             </div>
             <Link
