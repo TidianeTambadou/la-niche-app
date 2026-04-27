@@ -1,0 +1,9 @@
+* text=auto
+
+# Shell scripts must keep LF line endings on every platform
+*.sh text eol=lf
+
+# Swift / iOS / Android tooling files — keep LF
+*.swift text eol=lf
+*.gradle text eol=lf
+Package.swift text eol=lf
