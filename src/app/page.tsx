@@ -179,18 +179,20 @@ export default function HomePage() {
         )}
       </section>
 
-      {/* ── Sélection pour toi (carrousel quotidien) ───────────────────── */}
-      <section className="mb-12">
-        <div className="flex justify-between items-end mb-4">
-          <p className="text-[10px] uppercase tracking-[0.25em] font-bold">
-            Sélection pour toi
-          </p>
-          <span className="text-[10px] font-mono text-outline">
-            Du jour
-          </span>
-        </div>
-        <DailyShowcase hook={dailyPicks} hasProfile={!!profile} />
-      </section>
+      {/* ── Sélection pour toi (carrousel quotidien) — masquée temporairement ─ */}
+      {false && (
+        <section className="mb-12">
+          <div className="flex justify-between items-end mb-4">
+            <p className="text-[10px] uppercase tracking-[0.25em] font-bold">
+              Sélection pour toi
+            </p>
+            <span className="text-[10px] font-mono text-outline">
+              Du jour
+            </span>
+          </div>
+          <DailyShowcase hook={dailyPicks} hasProfile={!!profile} />
+        </section>
+      )}
 
       {/* ── Mini classement ─────────────────────────────────────────────── */}
       <section className="mb-12">
